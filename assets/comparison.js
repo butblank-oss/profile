@@ -26,6 +26,7 @@
     { key: 'name',     label: '서비스명',        pin: true },
     { key: 'channel',  label: '판매채널' },
     { key: 'billing',  label: '과금형태' },
+    { key: 'stage',    label: '질환 단계',       edit: 'spec' },
     { key: 'game',     label: '게임 구성 · 수',  edit: 'spec' },
     { key: 'download', label: '앱 다운로드수',   edit: 'spec', num: true },
     { key: 'rating',   label: '스토어 평점',     edit: 'spec', num: true },
@@ -47,6 +48,7 @@
     game:     [/게임 구성/, /콘텐츠 종류/],
     form:     [/제품 형태/],
     unit:     [/계약 단가/],
+    stage:    [/질환 단계/],
     updated:  [/최근 업데이트/],
     admin:    [/기관용 관리/, /관리자·리포트/, /기관용 관리 기능/],
   };
@@ -151,6 +153,7 @@
         game: spec('game'),
         form: spec('form'),
         unit: spec('unit'),
+        stage: spec('stage'),
         download: spec('download'),
         rating: spec('rating'),
         updated: spec('updated'),
@@ -231,7 +234,9 @@
   }
 
   // ── 화면 ────────────────────────────────────────────────────────────────
+  const US = 'us';   // 우리 서비스 섹션 id. 비교의 기준점이라 눈에 띄게 그린다.
   const CH_COLOR = {
+    '우리 서비스': ['#cfe4ff', '#0071e3'],
     '지자체 예산': ['#f4ecfa', '#8944ab'],
     '경로 다름':   ['#e9f6ec', '#1d7a3e'],
     '개인 B2C':    ['#e6f4f5', '#0a7e8c'],
@@ -251,7 +256,7 @@
     view: 'table',
     filterOpen: false,
     mapY: 'channel',
-    mapX: 'contract',
+    mapX: 'stage',
   };
 
   const el = (id) => document.getElementById(id);
@@ -545,6 +550,9 @@
     const { key, dir } = state.sort;
     const col = COLS.find((c) => c.key === key) || {};
     return visibleRows().slice().sort((a, b) => {
+      // 우리 서비스는 항상 맨 위. 비교의 기준점이라 정렬에 묻히면 안 된다.
+      if (a.id === US) return -1;
+      if (b.id === US) return 1;
       if (col.num) {
         const x = toNumber(a[key]), y = toNumber(b[key]);
         // 값이 없는 행은 방향과 상관없이 항상 아래로 — 빈칸이 1위가 되면 표를 못 읽는다.
@@ -608,6 +616,7 @@
     }
     sorted().forEach((r) => {
       const tr = document.createElement('tr');
+      if (r.id === US) tr.style.background = '#f5faff';
       cols.forEach((c) => {
         const td = document.createElement('td');
         td.style.cssText =
@@ -772,6 +781,13 @@
                   return v > 0 ? '납품 있음' : '납품 없음';
                 },
                 order: ['납품 없음', '납품 있음'] },
+    stage:    { label: '질환 단계', kind: 'cat',
+                of: (r) => {
+                  const v = r.stage || '';
+                  const hit = ['예방', '경도인지장애', '치매', '재활'].find((k) => v.indexOf(k) === 0);
+                  return hit || '미확인';
+                },
+                order: ['예방', '경도인지장애', '치매', '재활'] },
     billing:  { label: '과금형태', kind: 'cat', of: (r) => r.billing || '미확인' },
     contract: { label: '나라장터 3년 금액', kind: 'num', of: (r) => toNumber(r.contract), fmt: won },
     unit:     { label: '계약 단가', kind: 'num', of: (r) => toNumber(r.unit), fmt: won },
@@ -896,6 +912,7 @@
   // 자주 쓰는 조합. 앞쪽일수록 값이 채워진 곳이 많아 그림이 제대로 나온다.
   // [보이는 이름, 가로축, 세로축]
   const PRESETS = [
+    ['질환 단계 × 판매채널', 'stage', 'channel'],
     ['조달 실적 × 판매채널', 'contract', 'channel'],
     ['제품 형태 × 진입 채널', 'form', 'entry'],
     ['구매 주체 × 지자체 납품', 'gov', 'buyer'],
@@ -1025,13 +1042,17 @@
       dot.href = './competitor-profiles.html#' + r.id;
       dot.title = r.name + ' · ' + Y.ax.label + ' ' + (Y.ax.of(r) != null ? Y.ax.of(r) : '') +
         ' · ' + X.ax.label + ' ' + (X.ax.of(r) != null ? X.ax.of(r) : '');
+      const us = r.id === US;
+      const d = us ? 20 : 12;
       dot.style.cssText = 'position:absolute;left:' + (pt.x * 100) + '%;top:' + ((1 - pt.y) * 100) + '%;' +
-        'transform:translate(-50%,-50%);width:12px;height:12px;border-radius:50%;' +
-        'background:' + fg + ';box-shadow:0 0 0 4px ' + bg + ';text-decoration:none;z-index:3';
+        'transform:translate(-50%,-50%);width:' + d + 'px;height:' + d + 'px;border-radius:50%;' +
+        'background:' + (us ? '#0071e3' : fg) + ';box-shadow:0 0 0 ' + (us ? '7px rgba(0,113,227,.18)' : '4px ' + bg) +
+        ';text-decoration:none;z-index:' + (us ? 5 : 3);
       const tag = document.createElement('span');
       tag.textContent = r.name.length > 10 ? r.name.slice(0, 10) + '…' : r.name;
-      tag.style.cssText = 'position:absolute;top:-8px;white-space:nowrap;font-size:12px;font-weight:700;' +
-        'color:#1d1d1f;' + (right ? 'right:18px;' : 'left:18px;');
+      tag.style.cssText = 'position:absolute;top:' + (us ? '-10px' : '-8px') + ';white-space:nowrap;' +
+        'font-size:' + (us ? '14px' : '12px') + ';font-weight:' + (us ? '800' : '700') + ';' +
+        'color:' + (us ? '#0071e3' : '#1d1d1f') + ';' + (right ? 'right:' : 'left:') + (us ? 26 : 18) + 'px;';
       dot.appendChild(tag);
       area.appendChild(dot);
     });
