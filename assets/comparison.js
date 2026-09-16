@@ -19,19 +19,23 @@
 
   // 컬럼 정의. key 는 저장·정렬에 쓰고, get 은 한 프로파일에서 값을 뽑는다.
   // num 이 있으면 숫자로 정렬한다(문자 정렬이면 '10만' 이 '4.0' 보다 앞에 온다).
+  // edit: 'spec' 은 프로파일의 입력칸, 'note' 는 소감 textarea 를 가리킨다.
+  // 나머지(서비스명·판매채널·과금형태·나라장터)는 문서에서 끌어온 값이라
+  // 여기서 고치지 않는다 — 고치려면 문서를 고쳐야 한다.
   const COLS = [
     { key: 'name',     label: '서비스명',        pin: true },
     { key: 'channel',  label: '판매채널' },
     { key: 'billing',  label: '과금형태' },
-    { key: 'game',     label: '게임 구성 · 수' },
-    { key: 'download', label: '앱 다운로드수',   num: true },
-    { key: 'rating',   label: '스토어 평점',     num: true },
+    { key: 'game',     label: '게임 구성 · 수',  edit: 'spec' },
+    { key: 'download', label: '앱 다운로드수',   edit: 'spec', num: true },
+    { key: 'rating',   label: '스토어 평점',     edit: 'spec', num: true },
     { key: 'contract', label: '나라장터 계약',   num: true },
-    { key: 'updated',  label: '최근 업데이트' },
-    { key: 'admin',    label: '기관용 관리·리포트' },
+    { key: 'updated',  label: '최근 업데이트',   edit: 'spec' },
+    { key: 'admin',    label: '기관용 관리·리포트', edit: 'spec' },
     // 비고 성격이라 맨 뒤. 셀이 길어서 앞에 두면 다른 열이 밀린다.
-    { key: 'note',     label: '사용소감 정리',   wide: true },
+    { key: 'note',     label: '사용소감 정리',   edit: 'note', wide: true },
   ];
+  const EDITABLE = COLS.filter((c) => c.edit);
   const DEFAULT_ON = COLS.map((c) => c.key);
 
   // ── 값 뽑기 ─────────────────────────────────────────────────────────────
@@ -118,11 +122,16 @@
       const note = sec.querySelector('textarea[data-note]');
       const idx = fromIndex[sec.id] || {};
 
+      const slot = {};   // 저장 키. 입력칸이 없으면 값이 없다.
+      const base = {};   // HTML 에 박힌 기본값 — 내보낼 때 바뀐 것만 고르려고 들고 있는다.
       const spec = (k) => {
         const f = specOf(sec, SPEC[k]);
         if (!f) return '';
+        const key = sec.id + ':' + f.index;
+        slot[k] = key;
+        base[k] = f.el.value.trim();
         // 그 사람이 고친 값이 있으면 그것을 쓴다. 키 규칙은 프로파일 페이지와 동일.
-        const saved = store.spec[sec.id + ':' + f.index];
+        const saved = store.spec[key];
         return (saved != null ? saved : f.el.value).trim();
       };
 
@@ -144,6 +153,10 @@
         admin: spec('admin'),
         note: summarize(noteText, 3),
         noteFull: noteText,
+        slot: slot,
+        base: base,
+        baseNote: note ? note.value.trim() : '',
+        hasNote: !!note,
         shots: sec.querySelectorAll('image-slot[src], image-slot[data-filled]').length,
       });
     });
@@ -157,6 +170,60 @@
       catch (e) { return {}; }
     };
     return { spec: get('cp-spec-v1'), notes: get('cp-notes-v1') };
+  }
+
+  // ── 저장 ────────────────────────────────────────────────────────────────
+  // 프로파일 페이지와 같은 localStorage 키에 쓴다. 그래서 여기서 채우든
+  // 프로파일에서 채우든 양쪽에 똑같이 보인다. 다른 저장소를 쓰면 두 화면이
+  // 어긋난다.
+  function save(bucket, key, value) {
+    const name = bucket === 'note' ? 'cp-notes-v1' : 'cp-spec-v1';
+    let store = {};
+    try { store = JSON.parse(localStorage.getItem(name) || '{}') || {}; } catch (e) {}
+    store[key] = value;
+    try {
+      localStorage.setItem(name, JSON.stringify(store));
+      return true;
+    } catch (err) {
+      // 저장 실패를 삼키면 "적었는데 사라졌다" 가 된다.
+      const box = el('error');
+      box.textContent = '입력을 저장하지 못했습니다. 브라우저 저장소가 가득 찼거나 ' +
+        '시크릿 모드일 수 있습니다. 새로고침하면 방금 적은 내용이 사라집니다.';
+      box.style.display = '';
+      console.error('[comparison] save', err);
+      return false;
+    }
+  }
+
+  function applyEdit(row, col, value) {
+    const v = value.trim();
+    if (col.edit === 'note') {
+      if (!row.hasNote) return false;
+      if (!save('note', row.id, v)) return false;
+      row.noteFull = v;
+      row.note = summarize(v, 3);
+    } else {
+      const key = row.slot[col.key];
+      if (!key) return false;            // 그 섹션엔 해당 입력칸이 없다
+      if (!save('spec', key, v)) return false;
+      row[col.key] = v;
+    }
+    return true;
+  }
+
+  // 아직 안 채운 칸. 입력칸이 있는데 값이 비어 있는 것만 센다 —
+  // 입력칸 자체가 없는 섹션을 '할 일' 로 세면 영영 안 줄어든다.
+  function blanks() {
+    const out = [];
+    state.rows.forEach((r) => {
+      EDITABLE.forEach((c) => {
+        const can = c.edit === 'note' ? r.hasNote : !!r.slot[c.key];
+        if (!can) return;
+        const v = c.edit === 'note' ? r.noteFull : r[c.key];
+        if (!String(v || '').trim()) out.push({ row: r, col: c });
+      });
+    });
+    return out;
   }
 
   // ── 화면 ────────────────────────────────────────────────────────────────
@@ -173,6 +240,8 @@
     on: new Set(DEFAULT_ON),
     sort: { key: 'name', dir: 1 },
     expanded: new Set(),
+    editing: null,
+    todoOpen: false,
   };
 
   const el = (id) => document.getElementById(id);
@@ -200,6 +269,126 @@
       });
       box.appendChild(b);
     });
+  }
+
+  // 입력 상자 하나. 체크리스트와 표 안에서 같은 것을 쓴다.
+  function makeInput(row, col, opts) {
+    const multi = col.edit === 'note';
+    const inp = document.createElement(multi ? 'textarea' : 'input');
+    if (!multi) inp.type = 'text';
+    inp.value = (multi ? row.noteFull : row[col.key]) || '';
+    inp.placeholder = opts && opts.placeholder || '입력하면 저장됩니다';
+    const paint = () => {
+      inp.style.borderStyle = inp.value.trim() ? 'solid' : 'dashed';
+      inp.style.background = inp.value.trim() ? '#fff' : '#f5f5f7';
+    };
+    inp.style.cssText =
+      'display:block;width:100%;box-sizing:border-box;font-family:inherit;font-size:15px;' +
+      'line-height:1.5;color:#1d1d1f;border:1px dashed #d2d2d7;border-radius:8px;padding:9px 12px;' +
+      (multi ? 'min-height:84px;resize:vertical;' : '');
+    paint();
+    let t = null;
+    inp.addEventListener('input', () => {
+      paint();
+      clearTimeout(t);
+      // 한 글자마다 쓰지 않고 잠깐 모아서 쓴다.
+      t = setTimeout(() => {
+        applyEdit(row, col, inp.value);
+        renderTodo();
+        if (opts && opts.onSave) opts.onSave();
+      }, 350);
+    });
+    inp.addEventListener('blur', () => {
+      clearTimeout(t);
+      applyEdit(row, col, inp.value);
+      renderTodo();
+      if (opts && opts.onSave) opts.onSave();
+    });
+    return inp;
+  }
+
+  function renderTodo() {
+    const list = blanks();
+    el('todoCount').textContent = list.length ? list.length + '칸 남음' : '모두 채웠습니다';
+    const box = el('todo');
+    if (!state.todoOpen) { box.style.display = 'none'; return; }
+    box.style.display = '';
+    box.innerHTML = '';
+    if (!list.length) {
+      box.innerHTML = '<div style="font-size:15px;color:#6e6e73">비어 있는 칸이 없습니다.</div>';
+      return;
+    }
+    // 업체별로 묶는다. 항목별로 묶으면 같은 앱을 여러 번 찾아봐야 한다.
+    const byRow = new Map();
+    list.forEach((b) => {
+      if (!byRow.has(b.row)) byRow.set(b.row, []);
+      byRow.get(b.row).push(b.col);
+    });
+    byRow.forEach((cols, row) => {
+      const card = document.createElement('div');
+      card.style.cssText = 'background:#fff;border-radius:16px;padding:20px 22px;margin-bottom:12px';
+      const head = document.createElement('div');
+      head.style.cssText = 'display:flex;flex-wrap:wrap;align-items:baseline;gap:10px;margin-bottom:14px';
+      const nm = document.createElement('a');
+      nm.href = './competitor-profiles.html#' + row.id;
+      nm.textContent = row.name;
+      nm.style.cssText = 'font-size:17px;font-weight:700;color:#1d1d1f;text-decoration:none';
+      const sub = document.createElement('span');
+      sub.textContent = row.sub;
+      sub.style.cssText = 'font-size:13px;color:#86868b';
+      const cnt = document.createElement('span');
+      cnt.textContent = cols.length + '칸';
+      cnt.style.cssText = 'font-size:13px;font-weight:600;color:#b25000;background:#fdf1e9;border-radius:99px;padding:3px 10px';
+      head.append(nm, sub, cnt);
+      card.appendChild(head);
+
+      const grid = document.createElement('div');
+      grid.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px 16px';
+      cols.forEach((c) => {
+        const cell = document.createElement('div');
+        if (c.edit === 'note') cell.style.gridColumn = '1/-1';
+        const lb = document.createElement('div');
+        lb.textContent = c.label;
+        lb.style.cssText = 'font-size:13px;font-weight:600;color:#6e6e73;margin-bottom:6px';
+        cell.appendChild(lb);
+        cell.appendChild(makeInput(row, c, {
+          placeholder: c.edit === 'note' ? '직접 써 보고 느낀 점을 적어 주세요' : '찾아서 입력',
+          onSave: renderTable,
+        }));
+        grid.appendChild(cell);
+      });
+      card.appendChild(grid);
+      box.appendChild(card);
+    });
+  }
+
+  // 채운 값을 파일로 뽑는다. localStorage 는 이 브라우저에만 있어서, 저장소에
+  // 반영하려면 값을 밖으로 꺼내야 한다.
+  function exportEdits() {
+    const out = { specs: [], notes: [] };
+    state.rows.forEach((r) => {
+      EDITABLE.forEach((c) => {
+        if (c.edit === 'note') {
+          if (r.hasNote && r.noteFull !== r.baseNote) {
+            out.notes.push({ section: r.id, name: r.name, value: r.noteFull });
+          }
+          return;
+        }
+        const key = r.slot[c.key];
+        if (!key) return;
+        if ((r[c.key] || '') !== (r.base[c.key] || '')) {
+          out.specs.push({ key: key, section: r.id, name: r.name, label: c.label, value: r[c.key] });
+        }
+      });
+    });
+    const n = out.specs.length + out.notes.length;
+    if (!n) { alert('저장소에 있는 값과 달라진 것이 없습니다.'); return; }
+    const blob = new Blob([JSON.stringify(out, null, 2)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'comparison-edits.json';
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   }
 
   function sorted() {
@@ -303,6 +492,26 @@
           td.textContent = v || '—';
           if (!v) td.style.color = '#aeaeb2';
         }
+        // 채울 수 있는 칸은 그 자리에서 고친다. 표 → 프로파일 → 다시 표 로
+        // 오갈 필요가 없다.
+        const can = c.edit && (c.edit === 'note' ? r.hasNote : !!r.slot[c.key]);
+        if (can && state.editing !== r.id + ':' + c.key) {
+          td.style.cursor = 'text';
+          td.title = '클릭하면 여기서 바로 입력';
+          if (!r[c.key] && c.edit !== 'note') td.style.background = '#fbfbfd';
+          td.addEventListener('click', () => {
+            state.editing = r.id + ':' + c.key;
+            renderTable();
+            const f = document.querySelector('[data-editing] input,[data-editing] textarea');
+            if (f) { f.focus(); f.select && f.select(); }
+          });
+        } else if (can) {
+          td.textContent = '';
+          td.setAttribute('data-editing', '');
+          td.appendChild(makeInput(r, c, {
+            onSave: () => { state.editing = null; renderTable(); renderTodo(); },
+          }));
+        }
         if (c.wide) td.style.minWidth = '260px';
         tr.appendChild(td);
       });
@@ -331,6 +540,7 @@
       state.rows = readDoc(doc, readStore());
       if (!state.rows.length) throw new Error('프로파일 섹션을 하나도 읽지 못했습니다.');
       renderTable();
+      renderTodo();
       el('stamp').textContent = '갱신 ' + new Date().toLocaleString('ko-KR');
     } catch (err) {
       // 실패를 삼키지 않는다 — 조용히 옛 표가 남아 있으면 그게 최신인 줄 안다.
@@ -353,6 +563,13 @@
   document.addEventListener('DOMContentLoaded', () => {
     renderTags();
     el('refresh').addEventListener('click', refresh);
+    el('export').addEventListener('click', exportEdits);
+    el('todoToggle').addEventListener('click', () => {
+      state.todoOpen = !state.todoOpen;
+      el('todoToggle').textContent = state.todoOpen ? '채울 목록 접기' : '채울 목록 열기';
+      renderTodo();
+      if (state.todoOpen) el('todo').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    });
     refresh();
   });
 })();
