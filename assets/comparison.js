@@ -14,6 +14,10 @@
   'use strict';
 
   const SRC = './competitor-profiles.html';
+  // 채널 포지셔닝 맵은 시장 분석 문서가 원본이다. 복사해 두면 두 곳이
+  // 어긋나므로, 표와 같은 방식으로 그때그때 읽어 온다.
+  const MAP_SRC = './market-analysis.html';
+  const MAP_TITLE = '채널 포지셔닝';
   // 프로파일이 아닌 섹션. 인덱스 표·구분 배너·계약원장 명단.
   const NOT_PROFILE = new Set(['index', 'scope', 'roster']);
 
@@ -244,6 +248,7 @@
     todoOpen: false,
     rowsOn: null,      // null 이면 전체. Set 이면 그 업체만.
     onePage: false,
+    view: 'table',
   };
 
   const el = (id) => document.getElementById(id);
@@ -668,8 +673,82 @@
     fitOnePage();
   }
 
+  // ── 화면 전환 ───────────────────────────────────────────────────────────
+  let mapLoaded = false;
+
+  function setView(v) {
+    state.view = v;
+    const onMap = v === 'map';
+    ['tableView'].forEach((id) => { el(id).style.display = onMap ? 'none' : ''; });
+    el('mapView').style.display = onMap ? '' : 'none';
+    // 표 전용 도구는 맵에서 숨긴다. 맵에는 채울 칸도 정렬도 없다.
+    ['todoToggle', 'todoCount', 'export', 'onePage'].forEach((id) => {
+      el(id).style.display = onMap ? 'none' : '';
+    });
+    if (!onMap) el('todo').style.display = state.todoOpen ? '' : 'none';
+    else el('todo').style.display = 'none';
+    document.querySelectorAll('#viewTabs button').forEach((b) => {
+      const on = b.dataset.view === v;
+      b.style.background = on ? '#1d1d1f' : '#fff';
+      b.style.color = on ? '#fff' : '#6e6e73';
+      b.style.borderColor = on ? '#1d1d1f' : '#d2d2d7';
+      b.setAttribute('aria-selected', String(on));
+    });
+    try { localStorage.setItem('cmp-view-v1', v); } catch (e) {}
+    if (onMap && !mapLoaded) loadMap();
+    // 맵으로 시작하면 표 데이터를 읽지 않은 상태다. 돌아올 때 채운다.
+    if (!onMap && !state.rows.length) refresh();
+    else if (!onMap) fitOnePage();
+  }
+
+  async function loadMap(force) {
+    const box = el('mapView');
+    if (mapLoaded && !force) return;
+    box.innerHTML = '<div style="font-size:15px;color:#86868b;padding:40px 0">시장 분석 문서에서 읽는 중…</div>';
+    try {
+      const res = await fetch(MAP_SRC + '?t=' + Date.now(), { cache: 'no-store' });
+      if (!res.ok) throw new Error('시장 분석 문서를 불러오지 못했습니다 (HTTP ' + res.status + ')');
+      const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
+      // 제목으로 찾는다. 섹션 순서가 바뀌어도 따라간다.
+      const sec = [...doc.querySelectorAll('section')]
+        .find((n) => n.textContent.includes(MAP_TITLE));
+      if (!sec) throw new Error('\'' + MAP_TITLE + '\' 섹션을 찾지 못했습니다.');
+      // 섹션 자체의 배경·여백은 벗기고 안쪽만 가져온다. 이 페이지의 레이아웃에
+      // 맞추기 위해서다.
+      sec.style.background = '';
+      sec.style.padding = '0';
+      // 안쪽 컨테이너도 자체 max-width·여백을 갖고 있어 이 페이지에서는
+      // 왼쪽이 들여써진 것처럼 보인다. 폭을 이 페이지에 맞춘다.
+      const inner = sec.firstElementChild;
+      if (inner && /max-width/.test(inner.getAttribute('style') || '')) {
+        inner.style.maxWidth = '100%';
+        inner.style.padding = '0';
+        inner.style.margin = '0';
+      }
+      box.innerHTML = '';
+      box.appendChild(sec);
+      const src = document.createElement('p');
+      src.style.cssText = 'font-size:14px;color:#86868b;margin:clamp(28px,3.4vw,40px) 0 0;line-height:1.6';
+      src.innerHTML = '이 맵은 <a href="./market-analysis.html">시장 분석</a> 문서의 ' +
+        '<b style="font-weight:600;color:#1d1d1f">04 채널 포지셔닝</b> 을 그때그때 읽어 온 것입니다. ' +
+        '복사본이 아니라서 원본을 고치면 여기에도 바로 반영됩니다.';
+      box.appendChild(src);
+      mapLoaded = true;
+    } catch (err) {
+      box.innerHTML = '';
+      const e = document.createElement('div');
+      e.setAttribute('role', 'alert');
+      e.style.cssText = 'background:#fdf1e9;color:#7a3700;border-radius:14px;padding:16px 20px;font-size:15px;line-height:1.6';
+      e.textContent = '포지셔닝 맵을 불러오지 못했습니다. ' + err.message +
+        ' (file:// 로 열면 브라우저가 문서 읽기를 막습니다. 웹 주소로 열어 주세요.)';
+      box.appendChild(e);
+      console.error('[comparison] map', err);
+    }
+  }
+
   // ── 갱신 ────────────────────────────────────────────────────────────────
   async function refresh() {
+    if (state.view === 'map') { await loadMap(true); el('stamp').textContent = '갱신 ' + new Date().toLocaleString('ko-KR'); return; }
     const btn = el('refresh');
     btn.disabled = true;
     const label = btn.textContent;
@@ -716,6 +795,9 @@
     renderTags();
     el('refresh').addEventListener('click', refresh);
     el('export').addEventListener('click', exportEdits);
+    document.querySelectorAll('#viewTabs button').forEach((b) => {
+      b.addEventListener('click', () => setView(b.dataset.view));
+    });
     el('onePage').addEventListener('click', () => {
       state.onePage = !state.onePage;
       el('onePage').textContent = state.onePage ? '한 장 보기 끄기' : '한 장에 보기';
@@ -731,6 +813,9 @@
       renderTodo();
       if (state.todoOpen) el('todo').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     });
+    let v = 'table';
+    try { v = localStorage.getItem('cmp-view-v1') || 'table'; } catch (e) {}
+    setView(v === 'map' ? 'map' : 'table');
     refresh();
   });
 })();
