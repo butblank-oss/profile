@@ -27,6 +27,8 @@
     { key: 'channel',  label: '판매채널' },
     { key: 'billing',  label: '과금형태' },
     { key: 'stage',    label: '질환 단계',       edit: 'spec' },
+    { key: 'paid',     label: '유 · 무료',       edit: 'spec' },
+    { key: 'deliver',  label: '지자체 납품',     edit: 'spec' },
     { key: 'game',     label: '게임 구성 · 수',  edit: 'spec' },
     { key: 'download', label: '앱 다운로드수',   edit: 'spec', num: true },
     { key: 'rating',   label: '스토어 평점',     edit: 'spec', num: true },
@@ -49,6 +51,8 @@
     form:     [/제품 형태/],
     unit:     [/계약 단가/],
     stage:    [/질환 단계/],
+    paid:     [/유 · 무료/],
+    deliver:  [/지자체 납품/],
     updated:  [/최근 업데이트/],
     admin:    [/기관용 관리/, /관리자·리포트/, /기관용 관리 기능/],
   };
@@ -99,7 +103,31 @@
   }
 
   // ── 문서에서 한 줄씩 만들기 ─────────────────────────────────────────────
+  // 프로파일에서 글을 고쳤으면 그 수정을 먼저 입힌다. 안 입히면 프로파일에서
+  // 회사명을 고쳐도 표에는 옛 이름이 남아 두 화면이 어긋난다.
+  // 키 규칙은 profile-edit.js 와 같다 — 섹션 안 등장 순서.
+  const EDIT_INLINE = new Set(['B', 'STRONG', 'I', 'EM', 'SPAN', 'A', 'BR', 'SMALL', 'SUP', 'SUB']);
+  const EDIT_SKIP = new Set(['INPUT', 'TEXTAREA', 'BUTTON', 'SELECT', 'OPTION', 'SCRIPT',
+                             'STYLE', 'IMG', 'SVG', 'IMAGE-SLOT', 'NAV']);
+  function applyTextEdits(doc) {
+    let edits = {};
+    try { edits = JSON.parse(localStorage.getItem('cp-text-v1') || '{}') || {}; } catch (e) { return; }
+    if (!Object.keys(edits).length) return;
+    doc.querySelectorAll('section[id]').forEach((sec) => {
+      let n = 0;
+      sec.querySelectorAll('*').forEach((el) => {
+        if (EDIT_SKIP.has(el.tagName) || el.closest('image-slot') || el.closest('nav')) return;
+        if (!el.textContent.trim()) return;
+        for (const c of el.children) if (!EDIT_INLINE.has(c.tagName)) return;
+        n += 1;
+        const v = edits[sec.id + '#' + n];
+        if (v != null) el.innerHTML = v;
+      });
+    });
+  }
+
   function readDoc(doc, store) {
+    applyTextEdits(doc);
     // 인덱스 표에서 과금 주체·나라장터를 끌어온다. 이 두 값은 입력칸이 아니라
     // 표에만 있어서, 섹션 id 로 해당 행을 찾아 쓴다.
     const fromIndex = {};
@@ -154,6 +182,8 @@
         form: spec('form'),
         unit: spec('unit'),
         stage: spec('stage'),
+        paid: spec('paid'),
+        deliver: spec('deliver'),
         download: spec('download'),
         rating: spec('rating'),
         updated: spec('updated'),
@@ -774,13 +804,33 @@
     buyer:    { label: '구매 주체', kind: 'cat',
                 of: (r) => (B2C.has(r.channel) ? '개인 (B2C)' : '기관·정부 (B2B·B2G)'),
                 order: ['개인 (B2C)', '기관·정부 (B2B·B2G)'] },
-    gov:      { label: '지자체 납품', kind: 'cat',
+    // 나라장터에 잡혔는지. 이름을 '지자체 납품' 이라고 달았다가 틀렸다 —
+    // 나라장터 밖 계약도 있어서 여기 없다고 납품이 없는 건 아니다.
+    gov:      { label: '나라장터 계약 유무', kind: 'cat',
                 of: (r) => {
                   const v = toNumber(r.contract);
                   if (v == null) return '미확인';
-                  return v > 0 ? '납품 있음' : '납품 없음';
+                  return v > 0 ? '계약 있음' : '계약 없음';
+                },
+                order: ['계약 없음', '계약 있음'] },
+    // 실제 지자체 납품 여부. 입력칸에서 직접 읽는다.
+    deliver:  { label: '지자체 납품', kind: 'cat',
+                of: (r) => {
+                  const v = (r.deliver || '').trim();
+                  if (/^있/.test(v)) return '납품 있음';
+                  if (/^없/.test(v)) return '납품 없음';
+                  return '미확인';
                 },
                 order: ['납품 없음', '납품 있음'] },
+    paid:     { label: '유 · 무료', kind: 'cat',
+                of: (r) => {
+                  const v = (r.paid || '').trim();
+                  if (/^혼합/.test(v)) return '혼합';
+                  if (/^유료/.test(v)) return '유료';
+                  if (/^무료/.test(v)) return '무료';
+                  return '미확인';
+                },
+                order: ['무료', '혼합', '유료'] },
     stage:    { label: '질환 단계', kind: 'cat',
                 of: (r) => {
                   const v = r.stage || '';
@@ -915,9 +965,9 @@
     ['질환 단계 × 판매채널', 'stage', 'channel'],
     ['조달 실적 × 판매채널', 'contract', 'channel'],
     ['제품 형태 × 진입 채널', 'form', 'entry'],
-    ['구매 주체 × 지자체 납품', 'gov', 'buyer'],
+    ['구매 주체 × 지자체 납품', 'deliver', 'buyer'],
     ['다운로드 × 평점', 'download', 'rating'],
-    ['계약 단가 × 지자체 납품', 'unit', 'gov'],
+    ['계약 단가 × 지자체 납품', 'unit', 'deliver'],
   ];
 
   function loadMap() {
