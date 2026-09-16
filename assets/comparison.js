@@ -249,6 +249,7 @@
     rowsOn: null,      // null 이면 전체. Set 이면 그 업체만.
     onePage: false,
     view: 'table',
+    filterOpen: false,
   };
 
   const el = (id) => document.getElementById(id);
@@ -263,7 +264,7 @@
       b.textContent = c.label;
       b.setAttribute('aria-pressed', String(on));
       b.style.cssText =
-        'font-family:inherit;font-size:14px;font-weight:600;padding:7px 14px;border-radius:99px;' +
+        'font-family:inherit;font-size:12px;font-weight:600;padding:5px 11px;border-radius:99px;' +
         'cursor:pointer;transition:background .12s,color .12s;border:1px solid ' +
         (on ? '#0071e3' : '#d2d2d7') + ';background:' + (on ? '#0071e3' : '#fff') +
         ';color:' + (on ? '#fff' : '#6e6e73');
@@ -272,7 +273,7 @@
         if (c.pin) return;
         if (state.on.has(c.key)) state.on.delete(c.key); else state.on.add(c.key);
         try { localStorage.setItem('cmp-cols-v1', JSON.stringify([...state.on])); } catch (e) {}
-        renderTags(); renderTable();
+        renderTags(); renderFilterSummary(); renderTable();
       });
       box.appendChild(b);
     });
@@ -414,7 +415,7 @@
       b.setAttribute('aria-pressed', String(!!on));
       const c = tone || '#0071e3';
       b.style.cssText =
-        'font-family:inherit;font-size:13px;font-weight:600;padding:6px 12px;border-radius:99px;' +
+        'font-family:inherit;font-size:12px;font-weight:600;padding:5px 11px;border-radius:99px;' +
         'cursor:pointer;transition:background .12s,color .12s;white-space:nowrap;border:1px solid ' +
         (on ? c : '#d2d2d7') + ';background:' + (on ? c : '#fff') + ';color:' + (on ? '#fff' : '#6e6e73');
       b.addEventListener('click', onClick);
@@ -422,7 +423,7 @@
       return b;
     };
 
-    chip('전체', !state.rowsOn, () => { state.rowsOn = null; saveRows(); renderRowTags(); renderTable(); }, '#1d1d1f');
+    chip('전체', !state.rowsOn, () => { state.rowsOn = null; saveRows(); renderRowTags(); renderFilterSummary(); renderTable(); }, '#1d1d1f');
     // 칸별로 한 번에 고르기. 채널끼리 비교하는 일이 잦다.
     const lanes = [...new Set(state.rows.map((r) => r.channel))].filter(Boolean);
     lanes.forEach((ln) => {
@@ -430,7 +431,7 @@
       const on = !!state.rowsOn && ids.every((i) => state.rowsOn.has(i)) && state.rowsOn.size === ids.length;
       const [, fg] = CH_COLOR[ln] || ['#f0f0f2', '#6e6e73'];
       chip(ln + ' ' + ids.length, on, () => {
-        state.rowsOn = new Set(ids); saveRows(); renderRowTags(); renderTable();
+        state.rowsOn = new Set(ids); saveRows(); renderRowTags(); renderFilterSummary(); renderTable();
       }, fg);
     });
 
@@ -445,9 +446,24 @@
         if (!state.rowsOn) state.rowsOn = new Set(state.rows.map((x) => x.id));
         if (state.rowsOn.has(r.id)) state.rowsOn.delete(r.id); else state.rowsOn.add(r.id);
         if (!state.rowsOn.size) state.rowsOn = null;      // 다 끄면 전체로 되돌린다
-        saveRows(); renderRowTags(); renderTable();
+        saveRows(); renderRowTags(); renderFilterSummary(); renderTable();
       });
     });
+  }
+
+  // 접었을 때도 지금 무엇을 보고 있는지는 보여야 한다. 안 그러면 왜 표가
+  // 짧은지 모른 채 헤맨다.
+  function renderFilterSummary() {
+    const n = state.on.size, tot = COLS.length;
+    const rows = state.rowsOn ? state.rowsOn.size + '곳만' : state.rows.length + '곳 전체';
+    el('filterSummary').textContent =
+      rows + ' · 컬럼 ' + (n === tot ? '전체 ' + tot + '개' : n + '/' + tot + '개');
+  }
+
+  function applyFilterOpen() {
+    el('filters').style.display = state.filterOpen ? '' : 'none';
+    el('filterCaret').textContent = state.filterOpen ? '▾' : '▸';
+    el('filterToggle').setAttribute('aria-expanded', String(state.filterOpen));
   }
 
   function saveRows() {
@@ -470,14 +486,8 @@
       const n = el(id);
       if (n) n.style.display = state.onePage ? 'none' : '';
     });
-    ['rowTagsLabel', 'colTagsLabel'].forEach((id) => {
-      const n = el(id);
-      if (n) n.style.marginBottom = state.onePage ? '4px' : '';
-    });
-    ['rowTags', 'tags'].forEach((id) => {
-      const n = el(id);
-      if (n) n.style.marginBottom = state.onePage ? '8px' : '';
-    });
+    const fbox = el('filters');
+    if (fbox) fbox.style.marginBottom = state.onePage ? '8px' : '';
     if (!state.onePage) { el('fitNote').textContent = ''; return; }
     const availW = wrap.clientWidth;
     const availH = Math.max(240, window.innerHeight - wrap.getBoundingClientRect().top - 24);
@@ -747,11 +757,18 @@
   }
 
   // ── 갱신 ────────────────────────────────────────────────────────────────
+  const REFRESH_LABEL = '테이블 갱신하기';
+  let refreshing = false;
+
   async function refresh() {
     if (state.view === 'map') { await loadMap(true); el('stamp').textContent = '갱신 ' + new Date().toLocaleString('ko-KR'); return; }
+    // 겹쳐 호출되는 길이 있다(부팅 때 setView 와 boot 가 둘 다 부른다). 막지
+    // 않으면 두 번째가 '읽는 중…' 을 원래 글자로 착각해 저장하고, 끝난 뒤
+    // 그대로 되돌려 버튼이 영영 '읽는 중…' 으로 남는다.
+    if (refreshing) return;
+    refreshing = true;
     const btn = el('refresh');
     btn.disabled = true;
-    const label = btn.textContent;
     btn.textContent = '읽는 중…';
     el('error').style.display = 'none';
     try {
@@ -770,6 +787,7 @@
         }
       } catch (e) {}
       renderRowTags();
+      renderFilterSummary();
       renderTable();
       renderTodo();
       el('stamp').textContent = '갱신 ' + new Date().toLocaleString('ko-KR');
@@ -781,8 +799,10 @@
       box.style.display = '';
       console.error('[comparison]', err);
     } finally {
+      refreshing = false;
       btn.disabled = false;
-      btn.textContent = label;
+      // 저장해 둔 글자가 아니라 정해진 글자로 되돌린다.
+      btn.textContent = REFRESH_LABEL;
     }
   }
 
@@ -792,9 +812,18 @@
   } catch (e) {}
 
   document.addEventListener('DOMContentLoaded', () => {
+    try { state.filterOpen = localStorage.getItem('cmp-filter-open-v1') === '1'; } catch (e) {}
+    applyFilterOpen();
     renderTags();
+    renderFilterSummary();
     el('refresh').addEventListener('click', refresh);
     el('export').addEventListener('click', exportEdits);
+    el('filterToggle').addEventListener('click', () => {
+      state.filterOpen = !state.filterOpen;
+      applyFilterOpen();
+      try { localStorage.setItem('cmp-filter-open-v1', state.filterOpen ? '1' : '0'); } catch (e) {}
+      if (state.onePage) fitOnePage();
+    });
     document.querySelectorAll('#viewTabs button').forEach((b) => {
       b.addEventListener('click', () => setView(b.dataset.view));
     });

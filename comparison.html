@@ -19,7 +19,7 @@ a{color:#0071e3;text-decoration:none}
 a:hover{text-decoration:underline}
 tbody tr:hover td{background:#fafafa}
 </style>
-<script src="./assets/comparison.js?v=83c76060"></script>
+<script src="./assets/comparison.js?v=bed2661b"></script>
 </head>
 <body>
 
@@ -62,13 +62,20 @@ tbody tr:hover td{background:#fafafa}
 <div id="error" role="alert" style="display:none;background:#fdf1e9;color:#7a3700;border-radius:14px;padding:16px 20px;font-size:15px;line-height:1.6;margin-bottom:18px"></div>
 
 <div id="tableView">
-<div id="rowTagsLabel" style="font-size:13px;font-weight:600;color:#6e6e73;margin-bottom:10px">볼 업체 <span style="font-weight:400;color:#aeaeb2">· 눌러서 고르기 · 칸 이름을 누르면 그 채널만</span></div>
-<div id="rowTags" style="display:flex;flex-wrap:wrap;gap:7px;margin-bottom:16px"></div>
+<div style="display:flex;flex-wrap:wrap;align-items:baseline;gap:10px;margin-bottom:10px">
+<button id="filterToggle" type="button" aria-expanded="false" style="font-family:inherit;font-size:13px;font-weight:600;color:#6e6e73;background:transparent;border:0;padding:0;cursor:pointer">필터 <span id="filterCaret">▸</span></button>
+<span id="filterSummary" style="font-size:13px;color:#aeaeb2"></span>
+</div>
 
-<div id="colTagsLabel" style="font-size:13px;font-weight:600;color:#6e6e73;margin-bottom:10px">볼 컬럼 <span style="font-weight:400;color:#aeaeb2">· 눌러서 켜고 끄기 · 표 머리글을 누르면 정렬</span></div>
-<div id="tags" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px"></div>
+<div id="filters" style="display:none;background:#f5f5f7;border-radius:14px;padding:16px 18px;margin-bottom:14px">
+<div id="rowTagsLabel" style="font-size:12px;font-weight:600;color:#86868b;margin-bottom:8px">볼 업체 <span style="font-weight:400;color:#c7c7cc">· 칸 이름을 누르면 그 채널만</span></div>
+<div id="rowTags" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px"></div>
 
-<div id="summary" style="font-size:14px;color:#86868b;margin-bottom:6px"></div>
+<div id="colTagsLabel" style="font-size:12px;font-weight:600;color:#86868b;margin-bottom:8px">볼 컬럼 <span style="font-weight:400;color:#c7c7cc">· 표 머리글을 누르면 정렬</span></div>
+<div id="tags" style="display:flex;flex-wrap:wrap;gap:6px"></div>
+</div>
+
+<div id="summary" style="font-size:13px;color:#aeaeb2;margin-bottom:6px"></div>
 <div id="fitNote" style="font-size:13px;color:#0071e3;font-weight:600;margin-bottom:12px;min-height:18px"></div>
 
 <div id="tableWrap" style="overflow-x:auto;margin:0 -24px;padding:0 24px">
