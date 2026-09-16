@@ -244,7 +244,7 @@
     expanded: new Set(),
     editing: null,
     todoOpen: false,
-    rowsOn: null,      // null 이면 전체. Set 이면 그 업체만.
+    rowsOn: new Set(),  // 항상 Set. 비면 아무것도 안 보는 상태.
     onePage: false,
     view: 'table',
     filterOpen: false,
@@ -397,10 +397,20 @@
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   }
 
-  // 선택한 업체만. 처음엔 전체를 본다.
+  // 선택한 업체만 본다. rowsOn 은 항상 Set 이다 — null 로 '전체' 를 표현하면
+  // '아무것도 안 고름'(빈 표)과 구분이 안 된다. 둘은 다른 상태다.
   function visibleRows() {
-    if (!state.rowsOn) return state.rows;
     return state.rows.filter((r) => state.rowsOn.has(r.id));
+  }
+
+  function allIds() { return state.rows.map((r) => r.id); }
+
+  function afterRowChange() {
+    saveRows();
+    renderRowTags();
+    renderFilterSummary();
+    renderTable();
+    if (state.view === 'map') loadMap();
   }
 
   function renderRowTags() {
@@ -421,15 +431,24 @@
       return b;
     };
 
-    chip('전체', !state.rowsOn, () => { state.rowsOn = null; saveRows(); renderRowTags(); renderFilterSummary(); renderTable(); if (state.view === 'map') loadMap(); }, '#1d1d1f');
-    // 칸별로 한 번에 고르기. 채널끼리 비교하는 일이 잦다.
+    const ids = allIds();
+    const isAll = state.rowsOn.size === ids.length;
+    // 전체도 토글이다. 켜져 있을 때 누르면 전부 꺼져 표가 빈다.
+    chip('전체', isAll, () => {
+      state.rowsOn = isAll ? new Set() : new Set(ids);
+      afterRowChange();
+    }, '#1d1d1f');
+
+    // 칸도 토글이다. 여러 칸을 겹쳐 고를 수 있어야 채널끼리 비교가 된다.
     const lanes = [...new Set(state.rows.map((r) => r.channel))].filter(Boolean);
     lanes.forEach((ln) => {
-      const ids = state.rows.filter((r) => r.channel === ln).map((r) => r.id);
-      const on = !!state.rowsOn && ids.every((i) => state.rowsOn.has(i)) && state.rowsOn.size === ids.length;
+      const lids = state.rows.filter((r) => r.channel === ln).map((r) => r.id);
+      const on = lids.every((i) => state.rowsOn.has(i));
       const [, fg] = CH_COLOR[ln] || ['#f0f0f2', '#6e6e73'];
-      chip(ln + ' ' + ids.length, on, () => {
-        state.rowsOn = new Set(ids); saveRows(); renderRowTags(); renderFilterSummary(); renderTable(); if (state.view === 'map') loadMap();
+      chip(ln + ' ' + lids.length, on, () => {
+        if (on) lids.forEach((i) => state.rowsOn.delete(i));
+        else lids.forEach((i) => state.rowsOn.add(i));
+        afterRowChange();
       }, fg);
     });
 
@@ -438,22 +457,20 @@
     box.appendChild(sep);
 
     state.rows.forEach((r) => {
-      const on = !state.rowsOn || state.rowsOn.has(r.id);
-      chip(r.name.length > 12 ? r.name.slice(0, 12) + '…' : r.name, on, () => {
-        // 전체 상태에서 하나를 끄면 '나머지 전부' 로 시작한다.
-        if (!state.rowsOn) state.rowsOn = new Set(state.rows.map((x) => x.id));
+      chip(r.name.length > 12 ? r.name.slice(0, 12) + '…' : r.name, state.rowsOn.has(r.id), () => {
+        // 다 꺼도 전체로 되돌리지 않는다. 비우려고 껐을 수 있다.
         if (state.rowsOn.has(r.id)) state.rowsOn.delete(r.id); else state.rowsOn.add(r.id);
-        if (!state.rowsOn.size) state.rowsOn = null;      // 다 끄면 전체로 되돌린다
-        saveRows(); renderRowTags(); renderFilterSummary(); renderTable(); if (state.view === 'map') loadMap();
+        afterRowChange();
       });
     });
   }
 
   // 접었을 때도 지금 무엇을 보고 있는지는 보여야 한다. 안 그러면 왜 표가
-  // 짧은지 모른 채 헤맨다.
+  // 짧은지(또는 비었는지) 모른 채 헤맨다.
   function renderFilterSummary() {
     const n = state.on.size, tot = COLS.length;
-    const rows = state.rowsOn ? state.rowsOn.size + '곳만' : state.rows.length + '곳 전체';
+    const sel = state.rowsOn.size, all = state.rows.length;
+    const rows = sel === all ? '전체 ' + all + '곳' : sel === 0 ? '고른 업체 없음' : sel + '곳 / ' + all + '곳';
     el('filterSummary').textContent =
       rows + ' · 컬럼 ' + (n === tot ? '전체 ' + tot + '개' : n + '/' + tot + '개');
   }
@@ -465,10 +482,7 @@
   }
 
   function saveRows() {
-    try {
-      if (state.rowsOn) localStorage.setItem('cmp-rows-v1', JSON.stringify([...state.rowsOn]));
-      else localStorage.removeItem('cmp-rows-v1');
-    } catch (e) {}
+    try { localStorage.setItem('cmp-rows-v1', JSON.stringify([...state.rowsOn])); } catch (e) {}
   }
 
   // 표를 화면 한 장에 밀어 넣는다. 밀도를 줄여도 넘치면 통째로 축소한다.
@@ -575,6 +589,19 @@
     thead.appendChild(hr); t.appendChild(thead);
 
     const tb = document.createElement('tbody');
+    // 아무도 안 고르면 표가 통째로 빈다. 왜 비었는지 말해 주지 않으면
+    // 고장난 것으로 보인다.
+    if (!visibleRows().length) {
+      const tr = document.createElement('tr');
+      const td = document.createElement('td');
+      td.colSpan = cols.length;
+      td.style.cssText = 'padding:48px 10px;text-align:center;font-size:15px;color:#86868b;line-height:1.7';
+      td.innerHTML = '고른 업체가 없습니다.<br>' +
+        '<span style="font-size:14px;color:#aeaeb2">위 <b style="font-weight:600;color:#6e6e73">필터</b> 에서 ' +
+        '<b style="font-weight:600;color:#6e6e73">전체</b> 를 누르거나 볼 업체를 고르세요.</span>';
+      tr.appendChild(td);
+      tb.appendChild(tr);
+    }
     sorted().forEach((r) => {
       const tr = document.createElement('tr');
       cols.forEach((c) => {
@@ -675,7 +702,7 @@
     const vis = visibleRows();
     const filled = (k) => vis.filter((r) => r[k]).length;
     el('summary').textContent =
-      (state.rowsOn ? vis.length + '곳 (전체 ' + state.rows.length + '곳 중)' : vis.length + '곳') +
+      (vis.length === state.rows.length ? vis.length + '곳' : vis.length + '곳 (전체 ' + state.rows.length + '곳 중)') +
       ' · ' + cols.length + '개 컬럼 · 다운로드 ' + filled('download') + '곳 · 평점 ' + filled('rating') +
       '곳 · 게임 구성 ' + filled('game') + '곳 · 소감 ' + filled('noteFull') + '곳 채워짐';
     fitOnePage();
@@ -789,7 +816,11 @@
     box.innerHTML = '';
     const rows = visibleRows();
     if (!rows.length) {
-      box.innerHTML = '<div style="font-size:15px;color:#86868b;padding:40px 0">표를 먼저 읽어야 합니다. 비교표 탭에서 갱신해 주세요.</div>';
+      box.innerHTML = '<div style="font-size:15px;color:#86868b;padding:48px 0;line-height:1.7">' +
+        (state.rows.length
+          ? '고른 업체가 없습니다.<br><span style="font-size:14px;color:#aeaeb2">위 <b style="font-weight:600;color:#6e6e73">필터</b> 에서 <b style="font-weight:600;color:#6e6e73">전체</b> 를 누르거나 볼 업체를 고르세요.</span>'
+          : '표를 먼저 읽어야 합니다. 비교표 탭에서 갱신해 주세요.') +
+        '</div>';
       return;
     }
     const head = document.createElement('div');
@@ -863,12 +894,14 @@
       const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
       state.rows = readDoc(doc, readStore());
       if (!state.rows.length) throw new Error('프로파일 섹션을 하나도 읽지 못했습니다.');
+      // 처음에는 전체. 저장된 선택이 있으면 그것을 쓴다 — 빈 배열도 유효한
+      // 선택이라 그대로 둔다(아무것도 안 보는 상태).
+      state.rowsOn = new Set(allIds());
       try {
         const sv = JSON.parse(localStorage.getItem('cmp-rows-v1') || 'null');
-        if (Array.isArray(sv) && sv.length) {
-          const known = new Set(state.rows.map((r) => r.id));
-          const keep = sv.filter((i) => known.has(i));
-          state.rowsOn = keep.length && keep.length < state.rows.length ? new Set(keep) : null;
+        if (Array.isArray(sv)) {
+          const known = new Set(allIds());
+          state.rowsOn = new Set(sv.filter((i) => known.has(i)));
         }
       } catch (e) {}
       renderRowTags();
