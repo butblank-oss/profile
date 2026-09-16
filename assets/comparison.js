@@ -248,6 +248,8 @@
     onePage: false,
     view: 'table',
     filterOpen: false,
+    mapY: 'entry',
+    mapX: 'form',
   };
 
   const el = (id) => document.getElementById(id);
@@ -741,23 +743,70 @@
     else if (!onMap) fitOnePage();
   }
 
-  // 두 축. 세로는 판매채널(칸), 가로는 제품 형태 입력칸에서 읽는다.
-  // 값 앞머리만 본다 — '하드웨어 결합 · 검사 키오스크 · 문서 내 확인된 사실'
-  // 처럼 뒤에 근거가 붙기 때문이다.
+  // ── 기준(축) 정의 ───────────────────────────────────────────────────────
+  // 맵은 행 목록을 '어떤 기준으로 나눌지' 만 바꿔 가며 같은 코드로 그린다.
+  // of() 는 한 행이 속할 칸 이름을 돌려준다. order 가 있으면 그 순서로 세우고,
+  // 없으면 나온 순서대로 세운다.
   const HW = /^\s*하드웨어/;
   const SW = /^\s*순수\s*소프트/;
-  // 채널 → 위/아래. 병·의원과 경로 다름(민간보험 경로)은 위, 나머지는 아래.
-  const UPPER = new Set(['병 · 의원', '경로 다름']);
 
-  function placeRows(rows) {
-    const out = { q: [[], []], unknown: [] };   // q[위/아래][HW/SW]
-    rows.forEach((r) => {
-      const f = r.form || '';
-      const isHW = HW.test(f), isSW = SW.test(f);
-      if (!isHW && !isSW) { out.unknown.push(r); return; }
-      const up = UPPER.has(r.channel) ? 0 : 1;
-      (out.q[up][isHW ? 0 : 1] = out.q[up][isHW ? 0 : 1] || []).push(r);
-    });
+  // 숫자 값을 구간 이름으로. 값이 없으면 '미확인' 으로 모아 둔다 — 없는 것을
+  // 0 으로 세면 안 판 것과 못 판 것이 섞인다.
+  function bucket(raw, steps, unit) {
+    const v = toNumber(raw);
+    if (v == null) return '미확인';
+    for (const [limit, name] of steps) if (v < limit) return name;
+    return unit;
+  }
+
+  const DIMS = {
+    channel: {
+      label: '판매채널',
+      of: (r) => r.channel || '미분류',
+      order: ['지자체 예산', '경로 다름', '개인 B2C', '돌봄기관', '병 · 의원'],
+    },
+    form: {
+      label: '제품 형태',
+      of: (r) => (HW.test(r.form || '') ? '하드웨어 결합'
+                : SW.test(r.form || '') ? '순수 소프트웨어' : '미분류'),
+      order: ['하드웨어 결합', '순수 소프트웨어'],
+    },
+    entry: {
+      label: '진입 채널',
+      of: (r) => (new Set(['병 · 의원', '경로 다름']).has(r.channel)
+                ? '병·의원 · 보험 채널' : '보건소 · 기관 채널'),
+      order: ['병·의원 · 보험 채널', '보건소 · 기관 채널'],
+    },
+    billing: { label: '과금형태', of: (r) => r.billing || '미분류' },
+    contract: {
+      label: '나라장터 계약',
+      of: (r) => {
+        const v = toNumber(r.contract);
+        if (v == null) return '미확인';
+        if (v === 0) return '계약 없음';
+        return bucket(r.contract, [[1e7, '1천만 미만'], [5e7, '1천만~5천만']], '5천만 이상');
+      },
+      order: ['5천만 이상', '1천만~5천만', '1천만 미만', '계약 없음', '미확인'],
+    },
+    download: {
+      label: '앱 다운로드',
+      of: (r) => bucket(r.download, [[1e5, '1만 대'], [1e6, '10만 대']], '100만 이상'),
+      order: ['100만 이상', '10만 대', '1만 대', '미확인'],
+    },
+    rating: {
+      label: '스토어 평점',
+      of: (r) => bucket(r.rating, [[4, '4.0 미만'], [4.5, '4.0~4.5']], '4.5 이상'),
+      order: ['4.5 이상', '4.0~4.5', '4.0 미만', '미확인'],
+    },
+  };
+  const NONE = '__none__';
+
+  function keysOf(dim, rows) {
+    const seen = [];
+    rows.forEach((r) => { const k = dim.of(r); if (!seen.includes(k)) seen.push(k); });
+    if (!dim.order) return seen.sort((x, y) => x.localeCompare(y, 'ko'));
+    const out = dim.order.filter((k) => seen.includes(k));
+    seen.forEach((k) => { if (!out.includes(k)) out.push(k); });   // order 에 없는 값도 뒤에 붙인다
     return out;
   }
 
@@ -776,9 +825,8 @@
     c.style.cssText = 'display:inline-block;margin-top:7px;font-size:11px;font-weight:600;' +
       'padding:3px 8px;border-radius:99px;background:' + bg + ';color:' + fg;
     a.append(n, c);
-    // 자리를 설명하는 근거만 짧게 붙인다.
-    const bits = [r.form.split('·')[1], r.contract && r.contract !== '0건' ? r.contract : ''].
-      map((x) => (x || '').trim()).filter(Boolean);
+    const bits = [(r.form || '').split('·')[1], r.contract && r.contract !== '0건' ? r.contract : '']
+      .map((x) => (x || '').trim()).filter(Boolean);
     if (bits.length) {
       const d = document.createElement('div');
       d.textContent = bits.join(' · ');
@@ -788,9 +836,9 @@
     return a;
   }
 
-  function quadrant(title, rows) {
+  function cellBox(title, rows) {
     const box = document.createElement('div');
-    box.style.cssText = 'background:#f5f5f7;border-radius:18px;padding:18px 18px 20px;min-height:150px';
+    box.style.cssText = 'background:#f5f5f7;border-radius:18px;padding:18px 18px 20px;min-height:120px';
     const h = document.createElement('div');
     h.textContent = title + ' · ' + rows.length + '곳';
     h.style.cssText = 'font-size:13px;font-weight:600;color:#86868b;margin-bottom:12px';
@@ -809,6 +857,32 @@
     return box;
   }
 
+  function dimSelect(id, value, withNone) {
+    const sel = document.createElement('select');
+    sel.id = id;
+    sel.style.cssText =
+      'font-family:inherit;font-size:13px;font-weight:600;color:#1d1d1f;background:#fff;' +
+      'border:1px solid #d2d2d7;border-radius:99px;padding:6px 12px;cursor:pointer';
+    if (withNone) {
+      const o = document.createElement('option');
+      o.value = NONE; o.textContent = '나누지 않음';
+      sel.appendChild(o);
+    }
+    Object.keys(DIMS).forEach((k) => {
+      const o = document.createElement('option');
+      o.value = k; o.textContent = DIMS[k].label;
+      sel.appendChild(o);
+    });
+    sel.value = value;
+    sel.addEventListener('change', () => {
+      state.mapY = el('mapY').value;
+      state.mapX = el('mapX').value;
+      try { localStorage.setItem('cmp-mapdims-v1', JSON.stringify([state.mapY, state.mapX])); } catch (e) {}
+      loadMap();
+    });
+    return sel;
+  }
+
   // 맵은 표와 같은 데이터로 그린다. 별도 원본을 두면 표를 채워도 맵이 안 따라와
   // 두 그림이 어긋난다.
   function loadMap() {
@@ -823,51 +897,73 @@
         '</div>';
       return;
     }
+
+    const yDim = DIMS[state.mapY] || DIMS.entry;
+    const xDim = state.mapX === NONE ? null : (DIMS[state.mapX] || DIMS.form);
+
     const head = document.createElement('div');
     head.innerHTML =
-      '<div style="font-size:15px;font-weight:600;color:#0071e3;margin-bottom:14px">채널 포지셔닝</div>' +
-      '<h2 style="font-size:clamp(28px,4vw,48px);font-weight:700;letter-spacing:-.03em;line-height:1.12;margin:0;text-wrap:balance">하드웨어를 끼면 단가가 오르고, 채널이 좁아집니다</h2>' +
-      '<p style="font-size:clamp(17px,1.8vw,20px);color:#6e6e73;margin:20px 0 0;max-width:min(100%,900px);text-wrap:pretty">' +
-      '가로축은 제품 형태, 세로축은 진입 채널입니다. 비교표와 같은 데이터로 그리므로, ' +
-      '프로파일의 <b style="font-weight:600;color:#1d1d1f">제품 형태</b> 칸을 채우면 여기에 바로 자리를 잡습니다.</p>';
+      '<div style="font-size:15px;font-weight:600;color:#0071e3;margin-bottom:12px">포지셔닝</div>' +
+      '<h2 style="font-size:clamp(26px,3.4vw,40px);font-weight:700;letter-spacing:-.03em;line-height:1.14;margin:0;text-wrap:balance">' +
+      yDim.label + (xDim ? ' × ' + xDim.label : '') + ' 로 보기</h2>';
     box.appendChild(head);
 
-    const p = placeRows(rows);
-    const wrap = document.createElement('div');
-    wrap.style.cssText = 'margin-top:clamp(28px,3.4vw,40px)';
+    const ctl = document.createElement('div');
+    ctl.style.cssText = 'display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:18px 0 6px';
+    const lab = (t) => { const d = document.createElement('span');
+      d.textContent = t; d.style.cssText = 'font-size:13px;color:#86868b'; return d; };
+    ctl.appendChild(lab('가로로 묶기'));
+    ctl.appendChild(dimSelect('mapY', state.mapY, false));
+    ctl.appendChild(lab('· 안에서 다시'));
+    ctl.appendChild(dimSelect('mapX', state.mapX, true));
+    box.appendChild(ctl);
 
-    [[0, '병·의원 · 보험 채널'], [1, '보건소 · 기관 채널']].forEach(([up, label]) => {
+    const note0 = document.createElement('p');
+    note0.style.cssText = 'font-size:14px;color:#86868b;margin:0 0 clamp(20px,2.4vw,28px);line-height:1.6';
+    note0.innerHTML = '비교표와 같은 데이터로 그립니다. 프로파일을 채우면 여기에 바로 자리를 잡습니다. ' +
+      '위 <b style="font-weight:600;color:#1d1d1f">볼 업체</b> 필터도 그대로 걸립니다.';
+    box.appendChild(note0);
+
+    const yKeys = keysOf(yDim, rows);
+    const wrap = document.createElement('div');
+    yKeys.forEach((yk) => {
       const band = document.createElement('div');
       band.style.cssText = 'margin-bottom:16px';
       const l = document.createElement('div');
-      l.textContent = label;
+      const inY = rows.filter((r) => yDim.of(r) === yk);
+      l.textContent = yk + ' · ' + inY.length + '곳';
       l.style.cssText = 'font-size:14px;font-weight:700;color:#1d1d1f;margin-bottom:10px';
       band.appendChild(l);
-      const cols = document.createElement('div');
-      cols.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px';
-      cols.appendChild(quadrant('하드웨어 결합', p.q[up][0] || []));
-      cols.appendChild(quadrant('순수 소프트웨어', p.q[up][1] || []));
-      band.appendChild(cols);
+      if (!xDim) {
+        band.appendChild(cellBox(yDim.label, inY));
+      } else {
+        const xKeys = keysOf(xDim, rows);
+        const cols = document.createElement('div');
+        cols.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px';
+        xKeys.forEach((xk) => cols.appendChild(cellBox(xk, inY.filter((r) => xDim.of(r) === xk))));
+        band.appendChild(cols);
+      }
       wrap.appendChild(band);
     });
     box.appendChild(wrap);
 
-    if (p.unknown.length) {
+    // 값이 비어 '미분류' 로 빠진 곳은 따로 알려 준다. 채우면 자리를 잡는다.
+    const unknown = rows.filter((r) => yDim.of(r) === '미분류' || (xDim && xDim.of(r) === '미분류'));
+    if (unknown.length) {
       const u = document.createElement('div');
       u.style.cssText = 'background:#fdf1e9;color:#7a3700;border-radius:16px;padding:18px 22px;font-size:15px;line-height:1.6;margin-top:8px';
-      u.innerHTML = '<b style="font-weight:600">제품 형태가 비어 자리를 못 잡은 곳 ' + p.unknown.length + '곳.</b> ' +
-        p.unknown.map((r) => r.name).join(' · ') +
-        ' — 프로파일의 <b style="font-weight:600">제품 형태</b> 칸에 <b style="font-weight:600">하드웨어 결합</b> 또는 ' +
-        '<b style="font-weight:600">순수 소프트웨어</b> 로 시작하는 값을 넣으면 자리를 잡습니다.';
+      u.innerHTML = '<b style="font-weight:600">값이 비어 미분류로 빠진 곳 ' + unknown.length + '곳.</b> ' +
+        unknown.map((r) => r.name).join(' · ') +
+        ' — 프로파일에서 해당 칸을 채우면 자리를 잡습니다.';
       box.appendChild(u);
     }
 
     const note = document.createElement('p');
-    note.style.cssText = 'font-size:14px;color:#86868b;margin:clamp(28px,3.4vw,40px) 0 0;line-height:1.6';
-    note.innerHTML = '축 배치는 계약명·제품 설명을 근거로 한 <b style="font-weight:600;color:#1d1d1f">판단</b>입니다. ' +
-      '측정값이 아닙니다. 시장 전체(계약원장 업체 포함) 그림은 ' +
-      '<a href="./market-analysis.html">시장 분석</a> 문서의 04 채널 포지셔닝에 있습니다 — ' +
-      '이 맵은 프로파일을 만든 ' + rows.length + '곳만 그립니다.';
+    note.style.cssText = 'font-size:14px;color:#86868b;margin:clamp(24px,3vw,36px) 0 0;line-height:1.6';
+    note.innerHTML = '채널·제품 형태 배치는 계약명·제품 설명을 근거로 한 ' +
+      '<b style="font-weight:600;color:#1d1d1f">판단</b>입니다. 측정값이 아닙니다. ' +
+      '시장 전체(계약원장 업체 포함) 그림은 <a href="./market-analysis.html">시장 분석</a> 문서의 ' +
+      '04 채널 포지셔닝에 있습니다 — 이 맵은 프로파일을 만든 ' + rows.length + '곳만 그립니다.';
     box.appendChild(note);
     mapLoaded = true;
   }
@@ -932,6 +1028,10 @@
 
   document.addEventListener('DOMContentLoaded', () => {
     try { state.filterOpen = localStorage.getItem('cmp-filter-open-v1') === '1'; } catch (e) {}
+    try {
+      const d = JSON.parse(localStorage.getItem('cmp-mapdims-v1') || 'null');
+      if (Array.isArray(d) && d.length === 2) { state.mapY = d[0]; state.mapX = d[1]; }
+    } catch (e) {}
     applyFilterOpen();
     renderTags();
     renderFilterSummary();
