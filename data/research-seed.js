@@ -1,18 +1,20 @@
 /**
- * research-seed.js — 리서치 초기값 (아직 비어 있음)
+ * research-seed.js — 리서치 초기값 (자동 생성 · 직접 고치지 말 것)
  *
- * 프로토타입에서 채워 둔 스크린샷·소감·입력값을 이 파일로 옮기면, 사이트를
- * 처음 여는 브라우저에 그 값이 기본으로 채워진다. 지금은 비어 있어서 아무
- * 효과가 없다 — 모든 칸이 빈 상태로 시작한다.
+ * 사이트를 처음 여는 브라우저에 아래 값이 기본으로 깔린다. 이미 손댄 자리는
+ * 건드리지 않는다 — 규칙은 assets/slot-store.js 의 시드 절 참고.
  *
- * 채우는 방법: scripts/make-seed.js 참고.
+ * 지금 담는 건 스크린샷 순서뿐이다. 사용자가 드래그로 바꿔 둔 순서는
+ * localStorage 에만 있어서 HTML 로 옮길 자리가 없기 때문이다.
+ *   - 스크린샷 자체는 screenshots/*.webp 파일 + <image-slot src> 로 들어갔다
+ *   - 소감·입력칸은 HTML 에 직접 박혀 있다 (textarea 내용 / input value)
+ * 그래서 shots·notes·spec 은 비어 있다.
  *
- * 주의: 이 파일은 저장소에 커밋되고 사이트로 서비스된다. 즉 URL을 아는
- * 사람에게 그대로 노출된다. 외부에 보이면 곤란한 메모는 넣지 말 것.
+ * 다시 만들려면: node scripts/make-seed.js <research-backup.json>
  */
 window.__RESEARCH_SEED = {
-  shots: {},   // { '.image-slots.<n>.state.json': '<JSON 문자열>' }
-  notes: null, // cp-notes-v1       — 직접 사용 소감
-  spec: null,  // cp-spec-v1        — 추가 확인 항목
-  order: null, // cp-shot-order-v1  — 스크린샷 순서
+  "shots": {},
+  "notes": null,
+  "spec": null,
+  "order": "{\"funwave\": [\"fw1\", \"fw3\", \"fw2\", \"fw4\", \"fw5\", \"fw6\", \"fw7\", \"fw8\", \"fw9\", \"fw10\"], \"hayat\": [\"hyt7\", \"hyt5\", \"hyt6\", \"hyt3\", \"hyt1\", \"hyt2\", \"hyt4\", \"hyt8\", \"hyt9\", \"hyt10\"], \"brainfit45\": [\"brainfit454\", \"brainfit455\", \"brainfit456\", \"brainfit457\", \"brainfit451\", \"brainfit453\", \"brainfit452\", \"brainfit458\", \"brainfit459\", \"brainfit4510\"]}"
 };

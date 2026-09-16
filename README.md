@@ -12,6 +12,7 @@
 | `market-analysis.html` | 수요 모수 → TAM/SAM → 조달 실집행 + 포지셔닝 맵 2종 |
 | `contract-analysis-deck.html` | 16:9 발표 슬라이드 14장 (참고용 초기 산출물) |
 | `data/contracts_raw.csv` | 나라장터 계약원장 112건 원본 (2024.01–2026.08) |
+| `screenshots/*.webp` | 경쟁사 앱 화면 38장 (`<image-slot src>` 로 연결) |
 
 ## 리서치 워크스페이스
 
@@ -40,74 +41,44 @@
 
 이미지는 저장 전에 캔버스로 리샘플됩니다 — 긴 변 1800px, WebP 품질 0.92.
 
-## 초기값 옮겨 심기 (시드)
+## 채워진 리서치 데이터
 
-프로토타입에서 이미 채워 둔 스크린샷·메모를 사이트로 옮기려면 `data/research-seed.js`
-에 넣습니다. 이 값은 **아직 아무것도 입력하지 않은 브라우저**에만 깔립니다.
+프로토타입에서 조사해 둔 내용이 이미 들어가 있습니다. 어디에 어떻게 들어갔는지가
+수정할 때 중요합니다.
 
-프로토타입 페이지를 원래 보던 브라우저에서 열고, 개발자도구 콘솔에 붙여넣습니다.
+| 데이터 | 어디에 | 양 |
+|---|---|---|
+| 스크린샷 | `screenshots/*.webp` + `<image-slot src="./screenshots/…">` | 38장 |
+| 직접 사용 소감 | `<textarea data-note>` 안에 직접 | 9개 섹션 |
+| 추가 확인 항목 | `<input data-spec value="…">` | 34개 |
+| 스크린샷 순서 | `data/research-seed.js` → localStorage `cp-shot-order-v1` | 3개 섹션 |
+
+스크린샷·소감·입력값은 **HTML 에 박아** 뒀습니다. 저장소를 받은 누구나, 브라우저
+저장소가 막힌 환경에서도 똑같이 봅니다. 드래그로 바꾼 순서만 HTML 에 표현할 자리가
+없어서 시드(localStorage)로 넣었습니다.
+
+### 저장값이 HTML 기본값을 이깁니다
+
+프로토타입 원본은 저장된 값을 `el.value === ''` 일 때만 되살렸습니다. HTML 에 값이
+박힌 상태에서는 사용자가 고쳐도 새로고침 때 원래 값으로 돌아갑니다 — 핸드오프 문서가
+경고한 "새로고침하면 사라지는" 버그입니다. 이 저장소에서는 조건을 바꿨습니다.
 
 ```js
-(async () => {
-  const shots = {};
-  for (let i = -1; i < 24; i++) {
-    const f = i < 0 ? '.image-slots.state.json' : `.image-slots.${i}.state.json`;
-    try { const r = await fetch(f); if (r.ok) shots[f] = await r.text(); } catch (e) {}
-  }
-  const blob = new Blob([JSON.stringify({
-    shots,
-    notes: localStorage.getItem('cp-notes-v1'),
-    spec:  localStorage.getItem('cp-spec-v1'),
-    order: localStorage.getItem('cp-shot-order-v1'),
-  })], { type: 'application/json' });
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = 'research-backup.json';
-  a.click();
-})()
+// 원본
+if (store[key] != null && el.value === '') el.value = store[key];
+// 여기
+if (store[key] != null) el.value = store[key];
 ```
 
-받은 파일을 시드로 변환해 커밋합니다.
+빈 브라우저에서는 HTML 기본값이 그대로 보이고, 한 번 고치면 그 값이 남습니다.
+고친 내용은 그 브라우저에만 있습니다 — 저장소에 반영하려면 HTML 을 직접 고쳐
+커밋해야 합니다.
 
-```
-node scripts/make-seed.js research-backup.json
-```
+### 이미지를 바꾸거나 지우면
 
-### 시드가 기존 값을 덮지 않는 규칙
-
-한 번이라도 손댄 자리는 사용자 값이 이깁니다. 안 그러면 지운 이미지가 새로고침마다
-되살아납니다.
-
-- **이미지** — IndexedDB 에 해당 샤드 레코드가 없을 때만 시드를 읽습니다. `image-slot.js`
-  는 변경 시 샤드를 통째로 다시 쓰므로, 한 장만 지워도 그 샤드는 IndexedDB 차지가 되어
-  시드가 비껴갑니다.
-- **텍스트** — localStorage 에 그 키가 아예 없을 때만 넣습니다.
-
-### 주의
-
-`data/research-seed.js` 는 저장소에 커밋되고 사이트로 서비스됩니다. **URL을 아는 사람에게
-그대로 노출됩니다.** 외부에 보이면 곤란한 메모는 시드에 넣지 마십시오. 이미지가 많으면
-파일이 수십 MB가 되어 첫 로딩이 느려집니다.
-
-## 디자인 핸드오프와의 관계
-
-프로토타입(`*.dc.html`)을 마크업·인라인 스타일 그대로 이식했습니다. 걷어낸 것은 호스트
-전용 래퍼뿐입니다.
-
-| 프로토타입 | 이 저장소 |
-|---|---|
-| `<script src="./support.js">` (프로토타입 런타임) | 제거 |
-| `<x-dc>` 문서 래퍼 | 제거 |
-| `<helmet>` | `<head>` 로 승격 |
-| `<script type="text/x-dc">` + `DCLogic` 베이스 | 빈 `DCLogic` 스텁 + 부트스트랩을 붙인 평범한 `<script>` |
-| `<x-import from="./deck-stage.js">` | `<deck-stage>` 커스텀 엘리먼트 + `<script src>` |
-| `omelette.writeFile` / 사이드카 `fetch` | `assets/slot-store.js` (IndexedDB) |
-
-`assets/image-slot.js` 와 `assets/deck-stage.js` 는 **원본 그대로**입니다. 영속화는
-컴포넌트를 고치는 대신 같은 두 접점(사이드카 `fetch`, `omelette.writeFile`)을
-`assets/slot-store.js` 가 IndexedDB 로 갈아끼우는 방식으로 대체했습니다. 이 스크립트는
-반드시 `image-slot.js` 보다 먼저 로드되어야 합니다 — `image-slot.js` 가 첫 렌더에서
-`writeFile` 존재 여부로 편집 가능 여부를 판정하기 때문입니다.
+사용자가 슬롯에 새 이미지를 넣으면 IndexedDB 에 저장되고 `src` 보다 우선합니다.
+지우면 `src` 의 원본으로 되돌아갑니다 — 저장소가 준 기본값은 남고 개인 변경만
+얹히는 구조입니다.
 
 ## 칸(채널) 구분
 
