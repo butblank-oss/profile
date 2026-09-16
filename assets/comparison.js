@@ -789,45 +789,41 @@
     return Math.round(v).toLocaleString('ko-KR');
   }
 
-  // 축 하나를 준비한다. 수치축은 보이는 행들의 범위로 눈금을 잡는다.
-  // 위치는 항상 안쪽으로 물려 둔다(INSET). 0 이나 1 에 바로 찍으면 점과 이름이
-  // 축 눈금 글자에 겹쳐 읽을 수 없다.
-  const INSET = { x: [0.15, 0.95], y: [0.13, 0.93] };
-  const fit = (t, ax) => ax[0] + t * (ax[1] - ax[0]);
-
-  function prepAxis(key, rows, which) {
+  // 축 하나를 준비한다.
+  // 눈금 글자는 플롯 '바깥' 여백에 그린다. 안에 그리면 점과 겹치고, 아래쪽은
+  // overflow 에 잘려 아예 안 보인다(실제로 그랬다).
+  // band 는 그 축에서 한 칸이 차지하는 폭이다. 겹친 점을 칸 안에서 퍼뜨릴 때 쓴다.
+  function prepAxis(key, rows) {
     const ax = AXES[key];
-    const box = INSET[which];
     if (!ax) return null;
     if (ax.kind === 'cat') {
       const seen = [];
       rows.forEach((r) => { const v = ax.of(r); if (v !== '미확인' && !seen.includes(v)) seen.push(v); });
       const keys = ax.order ? ax.order.filter((k) => seen.includes(k)).concat(seen.filter((k) => !ax.order.includes(k)))
                             : seen.sort((x, y) => x.localeCompare(y, 'ko'));
-      const at = (i) => fit(keys.length === 1 ? 0.5 : i / (keys.length - 1), box);
+      const n = keys.length;
+      const at = (i) => (n === 1 ? 0.5 : (i + 0.5) / n);
       return {
-        ax: ax, label: ax.label, zero: null,
+        ax: ax, label: ax.label, keys: keys, band: n ? 1 / n : 1, zero: null,
         pos: (r) => { const i = keys.indexOf(ax.of(r)); return i < 0 ? null : at(i); },
-        ticks: keys.map((k, i) => ({ at: at(i), label: k })),
+        ticks: keys.map((k, i) => ({ at: at(i), label: k, line: n > 1 ? (i + 1) / n : null })),
       };
     }
 
     const vals = rows.map((r) => ax.of(r)).filter((v) => v != null && isFinite(v));
-    if (!vals.length) return { ax: ax, label: ax.label, zero: null, pos: () => null, ticks: [] };
+    if (!vals.length) return { ax: ax, label: ax.label, keys: [], band: 0.1, zero: null, pos: () => null, ticks: [] };
     const pos0 = vals.filter((v) => v > 0);
     const hasZero = vals.some((v) => v === 0);
     if (!pos0.length) {
-      return { ax: ax, label: ax.label, zero: fit(0, box),
-               pos: (r) => (ax.of(r) === 0 ? fit(0, box) : null),
-               ticks: [{ at: fit(0, box), label: '0' }] };
+      return { ax: ax, label: ax.label, keys: [], band: 0.2, zero: 0.06,
+               pos: (r) => (ax.of(r) === 0 ? 0.06 : null),
+               ticks: [{ at: 0.06, label: '0' }] };
     }
     let lo = Math.min.apply(null, pos0), hi = Math.max.apply(null, pos0);
-    // 0 은 눈금 위에 올리지 않고 따로 자리를 준다. 로그에는 0 이 없기도 하고,
-    // 무엇보다 '계약 0건' 과 '가장 싼 계약' 은 다른 이야기다. 같은 축에 이어
-    // 붙이면 안 판 곳이 최저가처럼 보인다.
-    const zeroAt = hasZero ? fit(0, box) : null;
-    const from = hasZero ? fit(0.16, box) : fit(0, box);
-    const to = fit(1, box);
+    // 0 은 눈금의 연장이 아니다. '계약 0건' 과 '가장 싼 계약' 은 다른 이야기라
+    // 따로 자리를 주고 점선으로 나눈다. 로그에 0 이 없기도 하다.
+    const zeroAt = hasZero ? 0.05 : null;
+    const from = hasZero ? 0.2 : 0.04, to = 0.96;
     const log = !ax.linear && hi / lo >= 20;
     if (lo === hi) { lo = lo * 0.6 || 0; hi = hi * 1.6 || 1; }
     const t = (v) => (log ? (Math.log(v) - Math.log(lo)) / (Math.log(hi) - Math.log(lo)) : (v - lo) / (hi - lo));
@@ -838,15 +834,41 @@
       label: ax.fmt(log ? Math.exp(Math.log(lo) + u * (Math.log(hi) - Math.log(lo))) : lo + u * (hi - lo)),
     }));
     return {
-      ax: ax, label: ax.label + (log ? ' (로그)' : ''), zero: zeroAt,
+      ax: ax, label: ax.label + (log ? ' (로그)' : ''), keys: [], band: 0.16, zero: zeroAt,
       pos: (r) => {
         const v = ax.of(r);
         if (v == null || !isFinite(v)) return null;
-        if (v === 0) return zeroAt;
-        return from + t(v) * (to - from);
+        return v === 0 ? zeroAt : from + t(v) * (to - from);
       },
       ticks: ticks,
     };
+  }
+
+  // 같은 자리에 겹친 점들을 그 칸 안에서 펼친다. 한 좌표에 쌓으면 이름이
+  // 포개져 몇 곳인지조차 안 보이고, 범주축 둘이면 죄다 네 귀퉁이에 몰린다.
+  function spread(points, X, Y) {
+    const cell = new Map();
+    points.forEach((p) => {
+      const k = Math.round(p.x * 25) + ':' + Math.round(p.y * 25);
+      if (!cell.has(k)) cell.set(k, []);
+      cell.get(k).push(p);
+    });
+    cell.forEach((list) => {
+      if (list.length < 2) return;
+      const n = list.length;
+      const cols = Math.min(n, Math.max(2, Math.round(Math.sqrt(n * 1.6))));
+      const rows2 = Math.ceil(n / cols);
+      // 칸 밖으로 새지 않게 한 칸의 60% 안에서만 펼친다.
+      const w = X.band * 0.6, h = Y.band * 0.6;
+      list.forEach((p, i) => {
+        const c = i % cols, r2 = Math.floor(i / cols);
+        p.x += cols > 1 ? (c / (cols - 1) - 0.5) * w : 0;
+        p.y += rows2 > 1 ? (r2 / (rows2 - 1) - 0.5) * h : 0;
+        p.x = Math.min(0.99, Math.max(0.01, p.x));
+        p.y = Math.min(0.99, Math.max(0.01, p.y));
+      });
+    });
+    return points;
   }
 
   function axisSelect(id, value, exclude) {
@@ -893,7 +915,7 @@
       return;
     }
     if (state.mapX === state.mapY) state.mapX = state.mapX === 'unit' ? 'gov' : 'unit';
-    const X = prepAxis(state.mapX, rows, 'x'), Y = prepAxis(state.mapY, rows, 'y');
+    const X = prepAxis(state.mapX, rows), Y = prepAxis(state.mapY, rows);
 
     const head = document.createElement('div');
     head.innerHTML =
@@ -934,83 +956,90 @@
 
     // 세로축 이름은 차트 위에 가로로 쓴다. 한글을 세로로 돌리면 뒤집혀 보인다.
     const ylab = document.createElement('div');
-    ylab.textContent = '↑ ' + Y.label;
-    ylab.style.cssText = 'font-size:13px;font-weight:600;color:#6e6e73;margin:14px 0 8px';
+    ylab.textContent = '▲ ' + Y.label;
+    ylab.style.cssText = 'font-size:13px;font-weight:700;color:#1d1d1f;margin:16px 0 6px';
     box.appendChild(ylab);
 
-    const plotted = rows.filter((r) => X.pos(r) != null && Y.pos(r) != null);
-    const plot = document.createElement('div');
-    plot.style.cssText = 'position:relative;width:100%;height:clamp(420px,52vw,620px);' +
-      'background:#f5f5f7;border-radius:20px;overflow:hidden';
+    // 바깥 여백(gutter)에 눈금 글자를 둔다. 안쪽 area 만 0..1 좌표계다.
+    const GX = 112, GY = 44;
+    const frame = document.createElement('div');
+    frame.id = 'plotFrame';
+    frame.style.cssText = 'position:relative;width:100%;height:clamp(400px,46vw,560px);' +
+      'padding:16px ' + 16 + 'px ' + GY + 'px ' + GX + 'px;box-sizing:border-box;' +
+      'background:#f5f5f7;border-radius:20px';
+    const area = document.createElement('div');
+    area.id = 'plotArea';
+    area.style.cssText = 'position:relative;width:100%;height:100%';
+    frame.appendChild(area);
 
-    const line = (horiz, at) => {
+    const line = (horiz, at, dashed) => {
       const d = document.createElement('div');
+      const st = dashed ? '1px dashed #c7c7cc' : '1px solid #e3e3e6';
       d.style.cssText = horiz
-        ? 'position:absolute;left:0;right:0;top:' + ((1 - at) * 100) + '%;height:1px;background:#e3e3e6'
-        : 'position:absolute;top:0;bottom:0;left:' + (at * 100) + '%;width:1px;background:#e3e3e6';
-      plot.appendChild(d);
+        ? 'position:absolute;left:0;right:0;top:' + ((1 - at) * 100) + '%;height:0;border-top:' + st
+        : 'position:absolute;top:0;bottom:0;left:' + (at * 100) + '%;width:0;border-left:' + st;
+      area.appendChild(d);
     };
-    X.ticks.forEach((t) => line(false, t.at));
-    Y.ticks.forEach((t) => line(true, t.at));
-    // 0 자리와 나머지 눈금 사이에 칸막이. 이어진 축이 아님을 눈으로 알린다.
-    [[X, false], [Y, true]].forEach(([A, horiz]) => {
-      if (A.zero == null) return;
-      const gap = horiz ? A.zero + 0.055 : A.zero + 0.045;
-      const d = document.createElement('div');
-      d.style.cssText = horiz
-        ? 'position:absolute;left:0;right:0;top:' + ((1 - gap) * 100) + '%;height:0;border-top:1px dashed #d2d2d7'
-        : 'position:absolute;top:0;bottom:0;left:' + (gap * 100) + '%;width:0;border-left:1px dashed #d2d2d7';
-      plot.appendChild(d);
-    });
+    X.ticks.forEach((t) => line(false, t.line != null ? t.line : t.at, false));
+    Y.ticks.forEach((t) => line(true, t.line != null ? t.line : t.at, false));
+    if (X.zero != null) line(false, 0.125, true);
+    if (Y.zero != null) line(true, 0.125, true);
 
-    // 눈금 글자
+    // 눈금 글자 — 왼쪽/아래 여백에. 플롯 안에 두면 점과 겹치고 잘린다.
     Y.ticks.forEach((t) => {
       const d = document.createElement('div');
       d.textContent = t.label;
-      d.style.cssText = 'position:absolute;left:10px;top:' + ((1 - t.at) * 100) + '%;' +
-        'transform:translateY(-50%);font-size:11px;color:#aeaeb2;font-weight:600;' +
-        'background:#f5f5f7;padding:0 4px;pointer-events:none';
-      plot.appendChild(d);
+      d.style.cssText = 'position:absolute;right:calc(100% + 12px);top:' + ((1 - t.at) * 100) + '%;' +
+        'transform:translateY(-50%);font-size:12px;color:#6e6e73;font-weight:600;' +
+        'white-space:nowrap;text-align:right;max-width:' + (GX - 18) + 'px;overflow:hidden;text-overflow:ellipsis';
+      area.appendChild(d);
     });
     X.ticks.forEach((t) => {
       const d = document.createElement('div');
       d.textContent = t.label;
-      d.style.cssText = 'position:absolute;bottom:6px;left:' + (t.at * 100) + '%;' +
-        'transform:translateX(-50%);font-size:11px;color:#aeaeb2;font-weight:600;' +
-        'background:#f5f5f7;padding:0 4px;white-space:nowrap;pointer-events:none';
-      plot.appendChild(d);
+      d.style.cssText = 'position:absolute;top:calc(100% + 10px);left:' + (t.at * 100) + '%;' +
+        'transform:translateX(-50%);font-size:12px;color:#6e6e73;font-weight:600;white-space:nowrap';
+      area.appendChild(d);
     });
 
-    // 같은 자리에 여러 곳이 겹치면 세로로 조금씩 밀어 준다. 안 밀면 이름이
-    // 포개져 몇 곳인지조차 안 보인다.
-    const seen = {};
-    plotted.forEach((r) => {
-      const x = X.pos(r), y = Y.pos(r);
-      const k = Math.round(x * 40) + ':' + Math.round(y * 40);
-      const dup = (seen[k] = (seen[k] || 0) + 1) - 1;
-      const [bg, fg] = CH_COLOR[r.channel] || ['#f0f0f2', '#6e6e73'];
-      const right = x > 0.72;
+    // 축이 둘 다 두 갈래면 사분면이 생긴다. 네 귀퉁이에 무슨 자리인지 적는다.
+    if (X.keys.length === 2 && Y.keys.length === 2) {
+      [[0, 1, 'left:8px;top:6px'], [1, 1, 'right:8px;top:6px'],
+       [0, 0, 'left:8px;bottom:6px'], [1, 0, 'right:8px;bottom:6px']].forEach(([xi, yi, css]) => {
+        const c = document.createElement('div');
+        c.textContent = Y.keys[yi] + ' · ' + X.keys[xi];
+        c.style.cssText = 'position:absolute;' + css + ';font-size:12px;font-weight:600;' +
+          'color:#aeaeb2;z-index:1;pointer-events:none;white-space:nowrap';
+        area.appendChild(c);
+      });
+    }
 
+    // 두 축 모두 값이 있는 것만 찍는다.
+    const plotted = rows.filter((r) => X.pos(r) != null && Y.pos(r) != null);
+    const pts = spread(plotted.map((r) => ({ r: r, x: X.pos(r), y: Y.pos(r) })), X, Y);
+    pts.forEach((pt) => {
+      const r = pt.r;
+      const [bg, fg] = CH_COLOR[r.channel] || ['#f0f0f2', '#6e6e73'];
+      const right = pt.x > 0.62;
       const dot = document.createElement('a');
       dot.href = './competitor-profiles.html#' + r.id;
-      dot.title = r.name + ' · ' + Y.ax.label + ' ' + (Y.ax.kind === 'cat' ? Y.ax.of(r) : (r[state.mapY] || '')) +
-        ' · ' + X.ax.label + ' ' + (X.ax.kind === 'cat' ? X.ax.of(r) : (r[state.mapX] || ''));
-      dot.style.cssText = 'position:absolute;left:' + (x * 100) + '%;top:calc(' + ((1 - y) * 100) + '% + ' +
-        (dup * 22 - 0) + 'px);transform:translate(-50%,-50%);width:13px;height:13px;border-radius:50%;' +
-        'background:' + fg + ';box-shadow:0 0 0 4px ' + bg + ';text-decoration:none;z-index:2';
-
+      dot.title = r.name + ' · ' + Y.ax.label + ' ' + (Y.ax.of(r) != null ? Y.ax.of(r) : '') +
+        ' · ' + X.ax.label + ' ' + (X.ax.of(r) != null ? X.ax.of(r) : '');
+      dot.style.cssText = 'position:absolute;left:' + (pt.x * 100) + '%;top:' + ((1 - pt.y) * 100) + '%;' +
+        'transform:translate(-50%,-50%);width:12px;height:12px;border-radius:50%;' +
+        'background:' + fg + ';box-shadow:0 0 0 4px ' + bg + ';text-decoration:none;z-index:3';
       const tag = document.createElement('span');
-      tag.textContent = r.name.length > 11 ? r.name.slice(0, 11) + '…' : r.name;
-      tag.style.cssText = 'position:absolute;top:-9px;white-space:nowrap;font-size:12px;font-weight:600;' +
-        'color:#1d1d1f;' + (right ? 'right:20px;' : 'left:20px;');
+      tag.textContent = r.name.length > 10 ? r.name.slice(0, 10) + '…' : r.name;
+      tag.style.cssText = 'position:absolute;top:-8px;white-space:nowrap;font-size:12px;font-weight:700;' +
+        'color:#1d1d1f;' + (right ? 'right:18px;' : 'left:18px;');
       dot.appendChild(tag);
-      plot.appendChild(dot);
+      area.appendChild(dot);
     });
-    box.appendChild(plot);
+    box.appendChild(frame);
 
     const xlab = document.createElement('div');
-    xlab.textContent = '→ ' + X.label;
-    xlab.style.cssText = 'font-size:13px;font-weight:600;color:#6e6e73;margin:10px 0 0;text-align:right';
+    xlab.textContent = X.label + ' ▶';
+    xlab.style.cssText = 'font-size:13px;font-weight:700;color:#1d1d1f;margin:10px 0 0;text-align:right';
     box.appendChild(xlab);
 
     const off = rows.filter((r) => X.pos(r) == null || Y.pos(r) == null);
