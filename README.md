@@ -40,6 +40,55 @@
 
 이미지는 저장 전에 캔버스로 리샘플됩니다 — 긴 변 1800px, WebP 품질 0.92.
 
+## 초기값 옮겨 심기 (시드)
+
+프로토타입에서 이미 채워 둔 스크린샷·메모를 사이트로 옮기려면 `data/research-seed.js`
+에 넣습니다. 이 값은 **아직 아무것도 입력하지 않은 브라우저**에만 깔립니다.
+
+프로토타입 페이지를 원래 보던 브라우저에서 열고, 개발자도구 콘솔에 붙여넣습니다.
+
+```js
+(async () => {
+  const shots = {};
+  for (let i = -1; i < 24; i++) {
+    const f = i < 0 ? '.image-slots.state.json' : `.image-slots.${i}.state.json`;
+    try { const r = await fetch(f); if (r.ok) shots[f] = await r.text(); } catch (e) {}
+  }
+  const blob = new Blob([JSON.stringify({
+    shots,
+    notes: localStorage.getItem('cp-notes-v1'),
+    spec:  localStorage.getItem('cp-spec-v1'),
+    order: localStorage.getItem('cp-shot-order-v1'),
+  })], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'research-backup.json';
+  a.click();
+})()
+```
+
+받은 파일을 시드로 변환해 커밋합니다.
+
+```
+node scripts/make-seed.js research-backup.json
+```
+
+### 시드가 기존 값을 덮지 않는 규칙
+
+한 번이라도 손댄 자리는 사용자 값이 이깁니다. 안 그러면 지운 이미지가 새로고침마다
+되살아납니다.
+
+- **이미지** — IndexedDB 에 해당 샤드 레코드가 없을 때만 시드를 읽습니다. `image-slot.js`
+  는 변경 시 샤드를 통째로 다시 쓰므로, 한 장만 지워도 그 샤드는 IndexedDB 차지가 되어
+  시드가 비껴갑니다.
+- **텍스트** — localStorage 에 그 키가 아예 없을 때만 넣습니다.
+
+### 주의
+
+`data/research-seed.js` 는 저장소에 커밋되고 사이트로 서비스됩니다. **URL을 아는 사람에게
+그대로 노출됩니다.** 외부에 보이면 곤란한 메모는 시드에 넣지 마십시오. 이미지가 많으면
+파일이 수십 MB가 되어 첫 로딩이 느려집니다.
+
 ## 디자인 핸드오프와의 관계
 
 프로토타입(`*.dc.html`)을 마크업·인라인 스타일 그대로 이식했습니다. 걷어낸 것은 호스트

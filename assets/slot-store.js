@@ -14,6 +14,10 @@
  *
  * 저장 실패는 절대 삼키지 않는다 — 핸드오프 문서가 명시한 요구사항이다.
  * writeFile 이 거부되면 화면 우하단에 배너를 띄우고 reject 한다.
+ *
+ * 시드(초기값)도 여기서 깐다. data/research-seed.js 가 프로토타입에서 옮겨 온
+ * 이미지·메모를 window.__RESEARCH_SEED 에 심어 두면, 아직 아무것도 입력하지
+ * 않은 브라우저에 그 값이 기본으로 채워진다. 자세한 규칙은 아래 시드 절에.
  */
 (() => {
   'use strict';
@@ -24,6 +28,32 @@
   // image-slot.js 가 읽고 쓰는 사이드카 파일명. 호스트에서는 실제 파일이었고
   // 여기서는 IndexedDB 레코드의 키로만 쓰인다.
   const SIDECAR_RE = /(^|\/)\.image-slots(\.\d+)?\.state\.json(\?.*)?$/;
+
+  // ── 시드 ────────────────────────────────────────────────────────────────
+  // data/research-seed.js 가 없거나 비어 있으면 아래는 전부 no-op 이다.
+  //
+  // 시드는 "아직 손대지 않은 자리"에만 깔린다. 사용자가 한 번이라도 고친
+  // 자리는 그 값이 이긴다 — 안 그러면 지운 이미지가 새로고침마다 되살아난다.
+  //   이미지: IndexedDB 에 해당 샤드 레코드가 없을 때만 시드를 읽는다.
+  //           image-slot.js 는 변경 시 샤드 통째로 다시 쓰므로, 한 장만 지워도
+  //           그 샤드는 IndexedDB 차지가 되어 시드가 비껴간다.
+  //   텍스트: localStorage 에 그 키가 아예 없을 때만 넣는다.
+  const seed = self.__RESEARCH_SEED || {};
+  const seedShots = seed.shots || {};
+
+  // 텍스트 시드는 반드시 동기적으로 깔아야 한다. 페이지 하단 스크립트가
+  // DOMContentLoaded 에 이 키들을 읽기 때문에, fetch 로 가져오면 늦는다.
+  // (그래서 시드는 JSON 이 아니라 평범한 <script> 파일이다.)
+  try {
+    const LS = { 'cp-notes-v1': 'notes', 'cp-spec-v1': 'spec', 'cp-shot-order-v1': 'order' };
+    for (const key in LS) {
+      const v = seed[LS[key]];
+      if (v != null && localStorage.getItem(key) === null) localStorage.setItem(key, v);
+    }
+  } catch (e) {
+    // 시크릿 모드 등 저장소가 막힌 환경. 시드 없이 빈 문서로 진행한다.
+    console.warn('[slot-store] 메모 초기값을 깔지 못했습니다.', e);
+  }
 
   let dbP = null;
 
@@ -102,20 +132,29 @@
       return nativeFetch(input, init);
     }
     const key = url.replace(/^.*\//, '').replace(/\?.*$/, '');
+    // IndexedDB 에 없으면 시드로, 시드에도 없으면 404 로 답한다
+    // — 404 는 image-slot.js 의 `r.ok` 분기가 기대하는 "빈 사이드카" 신호다.
+    const fallback = () => {
+      const s = seedShots[key];
+      if (s == null) return new Response('', { status: 404, statusText: 'Not Found' });
+      return new Response(typeof s === 'string' ? s : JSON.stringify(s), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    };
     return readKey(key).then(
       (body) => {
-        // 없는 사이드카는 404 로 답한다 — image-slot.js 의 `r.ok` 분기와 같다.
-        if (body == null) return new Response('', { status: 404, statusText: 'Not Found' });
+        if (body == null) return fallback();
         return new Response(body, {
           status: 200,
           headers: { 'Content-Type': 'application/json' },
         });
       },
-      // 읽기 실패는 배너까지 띄우지 않는다. 빈 문서로 시작할 뿐 데이터 유실이
+      // 읽기 실패는 배너까지 띄우지 않는다. 시드로 떨어질 뿐 데이터 유실이
       // 아니고, 뒤이은 쓰기가 실패하면 그때 배너가 뜬다.
       (err) => {
         console.warn('[slot-store] 저장된 이미지를 읽지 못했습니다.', err);
-        return new Response('', { status: 404, statusText: 'Not Found' });
+        return fallback();
       }
     );
   };
