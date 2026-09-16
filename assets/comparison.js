@@ -26,10 +26,11 @@
     { key: 'game',     label: '게임 구성 · 수' },
     { key: 'download', label: '앱 다운로드수',   num: true },
     { key: 'rating',   label: '스토어 평점',     num: true },
-    { key: 'note',     label: '사용소감 정리',   wide: true },
     { key: 'contract', label: '나라장터 계약',   num: true },
     { key: 'updated',  label: '최근 업데이트' },
     { key: 'admin',    label: '기관용 관리·리포트' },
+    // 비고 성격이라 맨 뒤. 셀이 길어서 앞에 두면 다른 열이 밀린다.
+    { key: 'note',     label: '사용소감 정리',   wide: true },
   ];
   const DEFAULT_ON = COLS.map((c) => c.key);
 
