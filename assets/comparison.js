@@ -14,10 +14,6 @@
   'use strict';
 
   const SRC = './competitor-profiles.html';
-  // 채널 포지셔닝 맵은 시장 분석 문서가 원본이다. 복사해 두면 두 곳이
-  // 어긋나므로, 표와 같은 방식으로 그때그때 읽어 온다.
-  const MAP_SRC = './market-analysis.html';
-  const MAP_TITLE = '채널 포지셔닝';
   // 프로파일이 아닌 섹션. 인덱스 표·구분 배너·계약원장 명단.
   const NOT_PROFILE = new Set(['index', 'scope', 'roster']);
 
@@ -49,6 +45,7 @@
     download: [/앱 설치 수/, /앱 다운로드 수/],
     rating:   [/앱 스토어 평점/],
     game:     [/게임 구성/, /콘텐츠 종류/],
+    form:     [/제품 형태/],
     updated:  [/최근 업데이트/],
     admin:    [/기관용 관리/, /관리자·리포트/, /기관용 관리 기능/],
   };
@@ -151,6 +148,7 @@
         billing: idx.billing || '',
         contract: idx.contract || '',
         game: spec('game'),
+        form: spec('form'),
         download: spec('download'),
         rating: spec('rating'),
         updated: spec('updated'),
@@ -423,7 +421,7 @@
       return b;
     };
 
-    chip('전체', !state.rowsOn, () => { state.rowsOn = null; saveRows(); renderRowTags(); renderFilterSummary(); renderTable(); }, '#1d1d1f');
+    chip('전체', !state.rowsOn, () => { state.rowsOn = null; saveRows(); renderRowTags(); renderFilterSummary(); renderTable(); if (state.view === 'map') loadMap(); }, '#1d1d1f');
     // 칸별로 한 번에 고르기. 채널끼리 비교하는 일이 잦다.
     const lanes = [...new Set(state.rows.map((r) => r.channel))].filter(Boolean);
     lanes.forEach((ln) => {
@@ -431,7 +429,7 @@
       const on = !!state.rowsOn && ids.every((i) => state.rowsOn.has(i)) && state.rowsOn.size === ids.length;
       const [, fg] = CH_COLOR[ln] || ['#f0f0f2', '#6e6e73'];
       chip(ln + ' ' + ids.length, on, () => {
-        state.rowsOn = new Set(ids); saveRows(); renderRowTags(); renderFilterSummary(); renderTable();
+        state.rowsOn = new Set(ids); saveRows(); renderRowTags(); renderFilterSummary(); renderTable(); if (state.view === 'map') loadMap();
       }, fg);
     });
 
@@ -446,7 +444,7 @@
         if (!state.rowsOn) state.rowsOn = new Set(state.rows.map((x) => x.id));
         if (state.rowsOn.has(r.id)) state.rowsOn.delete(r.id); else state.rowsOn.add(r.id);
         if (!state.rowsOn.size) state.rowsOn = null;      // 다 끄면 전체로 되돌린다
-        saveRows(); renderRowTags(); renderFilterSummary(); renderTable();
+        saveRows(); renderRowTags(); renderFilterSummary(); renderTable(); if (state.view === 'map') loadMap();
       });
     });
   }
@@ -691,6 +689,11 @@
     const onMap = v === 'map';
     ['tableView'].forEach((id) => { el(id).style.display = onMap ? 'none' : ''; });
     el('mapView').style.display = onMap ? '' : 'none';
+    // 컬럼 선택은 표에만 해당한다. 맵은 업체 선택만 쓴다.
+    ['colTagsLabel', 'tags'].forEach((id) => {
+      const n = el(id);
+      if (n) n.style.display = onMap ? 'none' : '';
+    });
     // 표 전용 도구는 맵에서 숨긴다. 맵에는 채울 칸도 정렬도 없다.
     ['todoToggle', 'todoCount', 'export', 'onePage'].forEach((id) => {
       el(id).style.display = onMap ? 'none' : '';
@@ -705,55 +708,137 @@
       b.setAttribute('aria-selected', String(on));
     });
     try { localStorage.setItem('cmp-view-v1', v); } catch (e) {}
-    if (onMap && !mapLoaded) loadMap();
+    if (onMap) loadMap();
     // 맵으로 시작하면 표 데이터를 읽지 않은 상태다. 돌아올 때 채운다.
     if (!onMap && !state.rows.length) refresh();
     else if (!onMap) fitOnePage();
   }
 
-  async function loadMap(force) {
-    const box = el('mapView');
-    if (mapLoaded && !force) return;
-    box.innerHTML = '<div style="font-size:15px;color:#86868b;padding:40px 0">시장 분석 문서에서 읽는 중…</div>';
-    try {
-      const res = await fetch(MAP_SRC + '?t=' + Date.now(), { cache: 'no-store' });
-      if (!res.ok) throw new Error('시장 분석 문서를 불러오지 못했습니다 (HTTP ' + res.status + ')');
-      const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
-      // 제목으로 찾는다. 섹션 순서가 바뀌어도 따라간다.
-      const sec = [...doc.querySelectorAll('section')]
-        .find((n) => n.textContent.includes(MAP_TITLE));
-      if (!sec) throw new Error('\'' + MAP_TITLE + '\' 섹션을 찾지 못했습니다.');
-      // 섹션 자체의 배경·여백은 벗기고 안쪽만 가져온다. 이 페이지의 레이아웃에
-      // 맞추기 위해서다.
-      sec.style.background = '';
-      sec.style.padding = '0';
-      // 안쪽 컨테이너도 자체 max-width·여백을 갖고 있어 이 페이지에서는
-      // 왼쪽이 들여써진 것처럼 보인다. 폭을 이 페이지에 맞춘다.
-      const inner = sec.firstElementChild;
-      if (inner && /max-width/.test(inner.getAttribute('style') || '')) {
-        inner.style.maxWidth = '100%';
-        inner.style.padding = '0';
-        inner.style.margin = '0';
-      }
-      box.innerHTML = '';
-      box.appendChild(sec);
-      const src = document.createElement('p');
-      src.style.cssText = 'font-size:14px;color:#86868b;margin:clamp(28px,3.4vw,40px) 0 0;line-height:1.6';
-      src.innerHTML = '이 맵은 <a href="./market-analysis.html">시장 분석</a> 문서의 ' +
-        '<b style="font-weight:600;color:#1d1d1f">04 채널 포지셔닝</b> 을 그때그때 읽어 온 것입니다. ' +
-        '복사본이 아니라서 원본을 고치면 여기에도 바로 반영됩니다.';
-      box.appendChild(src);
-      mapLoaded = true;
-    } catch (err) {
-      box.innerHTML = '';
-      const e = document.createElement('div');
-      e.setAttribute('role', 'alert');
-      e.style.cssText = 'background:#fdf1e9;color:#7a3700;border-radius:14px;padding:16px 20px;font-size:15px;line-height:1.6';
-      e.textContent = '포지셔닝 맵을 불러오지 못했습니다. ' + err.message +
-        ' (file:// 로 열면 브라우저가 문서 읽기를 막습니다. 웹 주소로 열어 주세요.)';
-      box.appendChild(e);
-      console.error('[comparison] map', err);
+  // 두 축. 세로는 판매채널(칸), 가로는 제품 형태 입력칸에서 읽는다.
+  // 값 앞머리만 본다 — '하드웨어 결합 · 검사 키오스크 · 문서 내 확인된 사실'
+  // 처럼 뒤에 근거가 붙기 때문이다.
+  const HW = /^\s*하드웨어/;
+  const SW = /^\s*순수\s*소프트/;
+  // 채널 → 위/아래. 병·의원과 경로 다름(민간보험 경로)은 위, 나머지는 아래.
+  const UPPER = new Set(['병 · 의원', '경로 다름']);
+
+  function placeRows(rows) {
+    const out = { q: [[], []], unknown: [] };   // q[위/아래][HW/SW]
+    rows.forEach((r) => {
+      const f = r.form || '';
+      const isHW = HW.test(f), isSW = SW.test(f);
+      if (!isHW && !isSW) { out.unknown.push(r); return; }
+      const up = UPPER.has(r.channel) ? 0 : 1;
+      (out.q[up][isHW ? 0 : 1] = out.q[up][isHW ? 0 : 1] || []).push(r);
+    });
+    return out;
+  }
+
+  function mapCard(r) {
+    const a = document.createElement('a');
+    a.href = './competitor-profiles.html#' + r.id;
+    const [bg, fg] = CH_COLOR[r.channel] || ['#f0f0f2', '#6e6e73'];
+    a.style.cssText =
+      'display:block;background:#fff;border:1px solid #e3e3e6;border-radius:14px;' +
+      'padding:12px 14px;text-decoration:none;color:#1d1d1f';
+    const n = document.createElement('div');
+    n.textContent = r.name;
+    n.style.cssText = 'font-size:15px;font-weight:700;letter-spacing:-.01em;line-height:1.25';
+    const c = document.createElement('span');
+    c.textContent = r.channel;
+    c.style.cssText = 'display:inline-block;margin-top:7px;font-size:11px;font-weight:600;' +
+      'padding:3px 8px;border-radius:99px;background:' + bg + ';color:' + fg;
+    a.append(n, c);
+    // 자리를 설명하는 근거만 짧게 붙인다.
+    const bits = [r.form.split('·')[1], r.contract && r.contract !== '0건' ? r.contract : ''].
+      map((x) => (x || '').trim()).filter(Boolean);
+    if (bits.length) {
+      const d = document.createElement('div');
+      d.textContent = bits.join(' · ');
+      d.style.cssText = 'font-size:12px;color:#86868b;margin-top:6px;line-height:1.4';
+      a.appendChild(d);
     }
+    return a;
+  }
+
+  function quadrant(title, rows) {
+    const box = document.createElement('div');
+    box.style.cssText = 'background:#f5f5f7;border-radius:18px;padding:18px 18px 20px;min-height:150px';
+    const h = document.createElement('div');
+    h.textContent = title + ' · ' + rows.length + '곳';
+    h.style.cssText = 'font-size:13px;font-weight:600;color:#86868b;margin-bottom:12px';
+    box.appendChild(h);
+    if (!rows.length) {
+      const e = document.createElement('div');
+      e.textContent = '해당 없음';
+      e.style.cssText = 'font-size:13px;color:#c7c7cc';
+      box.appendChild(e);
+      return box;
+    }
+    const grid = document.createElement('div');
+    grid.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px';
+    rows.forEach((r) => grid.appendChild(mapCard(r)));
+    box.appendChild(grid);
+    return box;
+  }
+
+  // 맵은 표와 같은 데이터로 그린다. 별도 원본을 두면 표를 채워도 맵이 안 따라와
+  // 두 그림이 어긋난다.
+  function loadMap() {
+    const box = el('mapView');
+    box.innerHTML = '';
+    const rows = visibleRows();
+    if (!rows.length) {
+      box.innerHTML = '<div style="font-size:15px;color:#86868b;padding:40px 0">표를 먼저 읽어야 합니다. 비교표 탭에서 갱신해 주세요.</div>';
+      return;
+    }
+    const head = document.createElement('div');
+    head.innerHTML =
+      '<div style="font-size:15px;font-weight:600;color:#0071e3;margin-bottom:14px">채널 포지셔닝</div>' +
+      '<h2 style="font-size:clamp(28px,4vw,48px);font-weight:700;letter-spacing:-.03em;line-height:1.12;margin:0;text-wrap:balance">하드웨어를 끼면 단가가 오르고, 채널이 좁아집니다</h2>' +
+      '<p style="font-size:clamp(17px,1.8vw,20px);color:#6e6e73;margin:20px 0 0;max-width:min(100%,900px);text-wrap:pretty">' +
+      '가로축은 제품 형태, 세로축은 진입 채널입니다. 비교표와 같은 데이터로 그리므로, ' +
+      '프로파일의 <b style="font-weight:600;color:#1d1d1f">제품 형태</b> 칸을 채우면 여기에 바로 자리를 잡습니다.</p>';
+    box.appendChild(head);
+
+    const p = placeRows(rows);
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'margin-top:clamp(28px,3.4vw,40px)';
+
+    [[0, '병·의원 · 보험 채널'], [1, '보건소 · 기관 채널']].forEach(([up, label]) => {
+      const band = document.createElement('div');
+      band.style.cssText = 'margin-bottom:16px';
+      const l = document.createElement('div');
+      l.textContent = label;
+      l.style.cssText = 'font-size:14px;font-weight:700;color:#1d1d1f;margin-bottom:10px';
+      band.appendChild(l);
+      const cols = document.createElement('div');
+      cols.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px';
+      cols.appendChild(quadrant('하드웨어 결합', p.q[up][0] || []));
+      cols.appendChild(quadrant('순수 소프트웨어', p.q[up][1] || []));
+      band.appendChild(cols);
+      wrap.appendChild(band);
+    });
+    box.appendChild(wrap);
+
+    if (p.unknown.length) {
+      const u = document.createElement('div');
+      u.style.cssText = 'background:#fdf1e9;color:#7a3700;border-radius:16px;padding:18px 22px;font-size:15px;line-height:1.6;margin-top:8px';
+      u.innerHTML = '<b style="font-weight:600">제품 형태가 비어 자리를 못 잡은 곳 ' + p.unknown.length + '곳.</b> ' +
+        p.unknown.map((r) => r.name).join(' · ') +
+        ' — 프로파일의 <b style="font-weight:600">제품 형태</b> 칸에 <b style="font-weight:600">하드웨어 결합</b> 또는 ' +
+        '<b style="font-weight:600">순수 소프트웨어</b> 로 시작하는 값을 넣으면 자리를 잡습니다.';
+      box.appendChild(u);
+    }
+
+    const note = document.createElement('p');
+    note.style.cssText = 'font-size:14px;color:#86868b;margin:clamp(28px,3.4vw,40px) 0 0;line-height:1.6';
+    note.innerHTML = '축 배치는 계약명·제품 설명을 근거로 한 <b style="font-weight:600;color:#1d1d1f">판단</b>입니다. ' +
+      '측정값이 아닙니다. 시장 전체(계약원장 업체 포함) 그림은 ' +
+      '<a href="./market-analysis.html">시장 분석</a> 문서의 04 채널 포지셔닝에 있습니다 — ' +
+      '이 맵은 프로파일을 만든 ' + rows.length + '곳만 그립니다.';
+    box.appendChild(note);
+    mapLoaded = true;
   }
 
   // ── 갱신 ────────────────────────────────────────────────────────────────
@@ -761,7 +846,7 @@
   let refreshing = false;
 
   async function refresh() {
-    if (state.view === 'map') { await loadMap(true); el('stamp').textContent = '갱신 ' + new Date().toLocaleString('ko-KR'); return; }
+
     // 겹쳐 호출되는 길이 있다(부팅 때 setView 와 boot 가 둘 다 부른다). 막지
     // 않으면 두 번째가 '읽는 중…' 을 원래 글자로 착각해 저장하고, 끝난 뒤
     // 그대로 되돌려 버튼이 영영 '읽는 중…' 으로 남는다.
@@ -790,6 +875,7 @@
       renderFilterSummary();
       renderTable();
       renderTodo();
+      if (state.view === 'map') loadMap();
       el('stamp').textContent = '갱신 ' + new Date().toLocaleString('ko-KR');
     } catch (err) {
       // 실패를 삼키지 않는다 — 조용히 옛 표가 남아 있으면 그게 최신인 줄 안다.
