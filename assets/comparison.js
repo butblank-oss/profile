@@ -242,6 +242,8 @@
     expanded: new Set(),
     editing: null,
     todoOpen: false,
+    rowsOn: null,      // null 이면 전체. Set 이면 그 업체만.
+    onePage: false,
   };
 
   const el = (id) => document.getElementById(id);
@@ -391,10 +393,127 @@
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   }
 
+  // 선택한 업체만. 처음엔 전체를 본다.
+  function visibleRows() {
+    if (!state.rowsOn) return state.rows;
+    return state.rows.filter((r) => state.rowsOn.has(r.id));
+  }
+
+  function renderRowTags() {
+    const box = el('rowTags');
+    box.innerHTML = '';
+    const chip = (label, on, onClick, tone) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = label;
+      b.setAttribute('aria-pressed', String(!!on));
+      const c = tone || '#0071e3';
+      b.style.cssText =
+        'font-family:inherit;font-size:13px;font-weight:600;padding:6px 12px;border-radius:99px;' +
+        'cursor:pointer;transition:background .12s,color .12s;white-space:nowrap;border:1px solid ' +
+        (on ? c : '#d2d2d7') + ';background:' + (on ? c : '#fff') + ';color:' + (on ? '#fff' : '#6e6e73');
+      b.addEventListener('click', onClick);
+      box.appendChild(b);
+      return b;
+    };
+
+    chip('전체', !state.rowsOn, () => { state.rowsOn = null; saveRows(); renderRowTags(); renderTable(); }, '#1d1d1f');
+    // 칸별로 한 번에 고르기. 채널끼리 비교하는 일이 잦다.
+    const lanes = [...new Set(state.rows.map((r) => r.channel))].filter(Boolean);
+    lanes.forEach((ln) => {
+      const ids = state.rows.filter((r) => r.channel === ln).map((r) => r.id);
+      const on = !!state.rowsOn && ids.every((i) => state.rowsOn.has(i)) && state.rowsOn.size === ids.length;
+      const [, fg] = CH_COLOR[ln] || ['#f0f0f2', '#6e6e73'];
+      chip(ln + ' ' + ids.length, on, () => {
+        state.rowsOn = new Set(ids); saveRows(); renderRowTags(); renderTable();
+      }, fg);
+    });
+
+    const sep = document.createElement('span');
+    sep.style.cssText = 'width:100%;height:0';
+    box.appendChild(sep);
+
+    state.rows.forEach((r) => {
+      const on = !state.rowsOn || state.rowsOn.has(r.id);
+      chip(r.name.length > 12 ? r.name.slice(0, 12) + '…' : r.name, on, () => {
+        // 전체 상태에서 하나를 끄면 '나머지 전부' 로 시작한다.
+        if (!state.rowsOn) state.rowsOn = new Set(state.rows.map((x) => x.id));
+        if (state.rowsOn.has(r.id)) state.rowsOn.delete(r.id); else state.rowsOn.add(r.id);
+        if (!state.rowsOn.size) state.rowsOn = null;      // 다 끄면 전체로 되돌린다
+        saveRows(); renderRowTags(); renderTable();
+      });
+    });
+  }
+
+  function saveRows() {
+    try {
+      if (state.rowsOn) localStorage.setItem('cmp-rows-v1', JSON.stringify([...state.rowsOn]));
+      else localStorage.removeItem('cmp-rows-v1');
+    } catch (e) {}
+  }
+
+  // 표를 화면 한 장에 밀어 넣는다. 밀도를 줄여도 넘치면 통째로 축소한다.
+  function fitOnePage() {
+    const wrap = el('tableWrap');
+    const t = el('table');
+    t.style.transform = '';
+    t.style.width = '';
+    wrap.style.height = '';
+    // 한 장 모드에서는 머리말·설명을 접는다. 이걸 두면 표가 쓸 수 있는 높이가
+    // 화면의 3분의 1도 안 남아서, 아무리 줄여도 한 장에 들어가지 않는다.
+    ['pageHead', 'pageNotes'].forEach((id) => {
+      const n = el(id);
+      if (n) n.style.display = state.onePage ? 'none' : '';
+    });
+    ['rowTagsLabel', 'colTagsLabel'].forEach((id) => {
+      const n = el(id);
+      if (n) n.style.marginBottom = state.onePage ? '4px' : '';
+    });
+    ['rowTags', 'tags'].forEach((id) => {
+      const n = el(id);
+      if (n) n.style.marginBottom = state.onePage ? '8px' : '';
+    });
+    if (!state.onePage) { el('fitNote').textContent = ''; return; }
+    const availW = wrap.clientWidth;
+    const availH = Math.max(240, window.innerHeight - wrap.getBoundingClientRect().top - 24);
+    const measure = () => {
+      const r = t.getBoundingClientRect();
+      return [Math.max(t.scrollWidth, Math.ceil(r.width)),
+              Math.max(t.scrollHeight, Math.ceil(r.height))];
+    };
+    const [w, h] = measure();
+    if (!w || !h) return;
+    // 세로가 모자라 줄인 경우 가로가 남아 보이지만, 표를 넓게 깔아도 이득이
+    // 없다 — 행 높이가 2줄 클램프로 고정이라 줄바꿈이 줄어들 여지가 없다.
+    // 넓히면 가로 스크롤만 생겨서 그대로 비율 축소만 한다.
+    const kW = availW / w, kH = availH / h;
+    const k = Math.min(1, kW, kH);
+    // 무엇 때문에 줄었는지 알려 준다. 세로가 모자라면 컬럼을 아무리 꺼도
+    // 커지지 않는다 — 높이는 업체 수만 따르기 때문이다.
+    const how = kH < kW ? '업체를 줄이면' : '컬럼을 줄이면';
+
+    // 알아볼 수 없을 만큼 줄이지는 않는다. 그보다 작아져야 한다면 맞추기를
+    // 포기하고 무엇을 줄여야 하는지 안내한다.
+    const MIN = 0.45;
+    if (k < MIN) {
+      el('fitNote').textContent =
+        '한 장에 넣으려면 ' + Math.round(k * 100) + '% 까지 줄여야 해서 맞추지 않았습니다 · ' + how + ' 들어갑니다';
+      return;
+    }
+    if (k < 1) {
+      t.style.transformOrigin = 'top left';
+      t.style.transform = 'scale(' + k + ')';
+      wrap.style.height = Math.ceil(h * k) + 'px';
+    }
+    el('fitNote').textContent = k < 1
+      ? Math.round(k * 100) + '% 로 축소해 맞췄습니다 · ' + how + ' 더 크게 볼 수 있습니다'
+      : '한 장에 들어갑니다';
+  }
+
   function sorted() {
     const { key, dir } = state.sort;
     const col = COLS.find((c) => c.key === key) || {};
-    return state.rows.slice().sort((a, b) => {
+    return visibleRows().slice().sort((a, b) => {
       if (col.num) {
         const x = toNumber(a[key]), y = toNumber(b[key]);
         // 값이 없는 행은 방향과 상관없이 항상 아래로 — 빈칸이 1위가 되면 표를 못 읽는다.
@@ -415,6 +534,12 @@
     const cols = COLS.filter((c) => state.on.has(c.key));
     const t = el('table');
     t.innerHTML = '';
+    // 한 장 모드: 글자·여백을 줄이고 긴 셀은 두 줄로 자른다. 그래도 넘치면
+    // fitOnePage() 가 통째로 축소한다.
+    const tight = state.onePage;
+    const PAD = tight ? '7px 8px' : '14px 10px';
+    const FS = tight ? '13px' : '15px';
+    t.style.minWidth = tight ? '0' : '900px';
 
     const thead = document.createElement('thead');
     const hr = document.createElement('tr');
@@ -422,8 +547,8 @@
       const th = document.createElement('th');
       const active = state.sort.key === c.key;
       th.style.cssText =
-        'text-align:' + (c.num ? 'right' : 'left') + ';font-size:13px;font-weight:600;' +
-        'color:' + (active ? '#0071e3' : '#86868b') + ';padding:12px 10px;white-space:nowrap;' +
+        'text-align:' + (c.num ? 'right' : 'left') + ';font-size:' + (tight ? '12px' : '13px') + ';font-weight:600;' +
+        'color:' + (active ? '#0071e3' : '#86868b') + ';padding:' + (tight ? '7px 8px' : '12px 10px') + ';white-space:nowrap;' +
         'border-bottom:1px solid #d2d2d7;cursor:pointer;user-select:none;position:sticky;top:0;background:#fff';
       th.textContent = c.label + (active ? (state.sort.dir > 0 ? ' ↑' : ' ↓') : '');
       th.title = '클릭하면 정렬';
@@ -442,8 +567,10 @@
       cols.forEach((c) => {
         const td = document.createElement('td');
         td.style.cssText =
-          'padding:14px 10px;border-bottom:1px solid #f0f0f2;font-size:15px;vertical-align:top;' +
-          'line-height:1.5;' + (c.num ? 'text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap;' : '');
+          'padding:' + PAD + ';border-bottom:1px solid #f0f0f2;font-size:' + FS + ';vertical-align:top;' +
+          'line-height:' + (tight ? '1.35' : '1.5') + ';' +
+          (c.num ? 'text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap;' : '');
+        if (tight) td.style.maxWidth = c.wide ? '220px' : '150px';
 
         if (c.key === 'name') {
           const a = document.createElement('a');
@@ -469,6 +596,8 @@
           if (!r.noteFull) {
             td.textContent = '—';
             td.style.color = '#aeaeb2';
+          } else if (tight) {
+            td.textContent = r.note;
           } else {
             const open = state.expanded.has(r.id);
             const p = document.createElement('div');
@@ -494,7 +623,7 @@
         }
         // 채울 수 있는 칸은 그 자리에서 고친다. 표 → 프로파일 → 다시 표 로
         // 오갈 필요가 없다.
-        const can = c.edit && (c.edit === 'note' ? r.hasNote : !!r.slot[c.key]);
+        const can = !tight && c.edit && (c.edit === 'note' ? r.hasNote : !!r.slot[c.key]);
         if (can && state.editing !== r.id + ':' + c.key) {
           td.style.cursor = 'text';
           td.title = '클릭하면 여기서 바로 입력';
@@ -512,17 +641,31 @@
             onSave: () => { state.editing = null; renderTable(); renderTodo(); },
           }));
         }
-        if (c.wide) td.style.minWidth = '260px';
+        if (c.wide && !tight) td.style.minWidth = '260px';
+        // 두 줄까지만. 자르지 않으면 긴 셀 하나가 표 전체 높이를 정해 버린다.
+        // td 자체가 아니라 안쪽 div 를 자른다 — td 의 display 를 바꾸면
+        // 테이블 셀이 아니게 되어 폭·높이 계산이 통째로 깨진다.
+        if (tight) {
+          const clamp = document.createElement('div');
+          clamp.style.cssText =
+            'display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;' +
+            'overflow:hidden;line-height:1.35';
+          while (td.firstChild) clamp.appendChild(td.firstChild);
+          td.appendChild(clamp);
+        }
         tr.appendChild(td);
       });
       tb.appendChild(tr);
     });
     t.appendChild(tb);
 
-    const filled = (k) => state.rows.filter((r) => r[k]).length;
+    const vis = visibleRows();
+    const filled = (k) => vis.filter((r) => r[k]).length;
     el('summary').textContent =
-      state.rows.length + '곳 · 다운로드 ' + filled('download') + '곳 · 평점 ' + filled('rating') +
+      (state.rowsOn ? vis.length + '곳 (전체 ' + state.rows.length + '곳 중)' : vis.length + '곳') +
+      ' · ' + cols.length + '개 컬럼 · 다운로드 ' + filled('download') + '곳 · 평점 ' + filled('rating') +
       '곳 · 게임 구성 ' + filled('game') + '곳 · 소감 ' + filled('noteFull') + '곳 채워짐';
+    fitOnePage();
   }
 
   // ── 갱신 ────────────────────────────────────────────────────────────────
@@ -539,6 +682,15 @@
       const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
       state.rows = readDoc(doc, readStore());
       if (!state.rows.length) throw new Error('프로파일 섹션을 하나도 읽지 못했습니다.');
+      try {
+        const sv = JSON.parse(localStorage.getItem('cmp-rows-v1') || 'null');
+        if (Array.isArray(sv) && sv.length) {
+          const known = new Set(state.rows.map((r) => r.id));
+          const keep = sv.filter((i) => known.has(i));
+          state.rowsOn = keep.length && keep.length < state.rows.length ? new Set(keep) : null;
+        }
+      } catch (e) {}
+      renderRowTags();
       renderTable();
       renderTodo();
       el('stamp').textContent = '갱신 ' + new Date().toLocaleString('ko-KR');
@@ -564,6 +716,15 @@
     renderTags();
     el('refresh').addEventListener('click', refresh);
     el('export').addEventListener('click', exportEdits);
+    el('onePage').addEventListener('click', () => {
+      state.onePage = !state.onePage;
+      el('onePage').textContent = state.onePage ? '한 장 보기 끄기' : '한 장에 보기';
+      el('onePage').style.background = state.onePage ? '#1d1d1f' : '#fff';
+      el('onePage').style.color = state.onePage ? '#fff' : '#1d1d1f';
+      el('onePage').style.borderColor = state.onePage ? '#1d1d1f' : '#d2d2d7';
+      renderTable();
+    });
+    window.addEventListener('resize', fitOnePage);
     el('todoToggle').addEventListener('click', () => {
       state.todoOpen = !state.todoOpen;
       el('todoToggle').textContent = state.todoOpen ? '채울 목록 접기' : '채울 목록 열기';
